@@ -111,7 +111,7 @@ const STAFF_ACCOUNT = {
   password: "gdsdn2026"
 };
 
-const OWN_WAREHOUSES = ["SDNC.UTM","SDNC.SHO","SDNC.DEM","SDNC.RUS"];
+const OWN_WAREHOUSES = ["SDNC.UTM","SDNC.SHO","SDNC.DEM","SDNC.RUS","SDNX.STR"];
 const CHUNK_SIZE = 4000; // baris per dokumen Firestore (aman di bawah batas 1MB/dokumen)
 
 let state = {
@@ -838,7 +838,7 @@ function uploadView(){
 // saat memproses file besar (puluhan ribu baris). Interface readExcel() tetap sama persis.
 const _xlsxWorkerCode = `
   importScripts('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
-  const OWN_WAREHOUSES = ["SDNC.UTM","SDNC.SHO","SDNC.DEM","SDNC.RUS"];
+  const OWN_WAREHOUSES = ["SDNC.UTM","SDNC.SHO","SDNC.DEM","SDNC.RUS","SDNX.STR"];
   function pick(r, keys){
     const norm = s => String(s).trim().toLowerCase().replace(/\\s+/g,' ');
     const wanted = keys.map(norm);
