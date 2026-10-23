@@ -88,6 +88,10 @@ th{color:var(--muted);font-weight:500;}
 .kTotals{margin-top:12px;border-top:1px solid var(--line);padding-top:10px;line-height:1.9;}
 .kTotals .kBig{font-size:18px;font-weight:700;color:var(--amber);}
 select{background:#0f1319;border:1px solid var(--line);border-radius:7px;color:var(--text);padding:9px 10px;font:inherit;}
+.kSearchRes{margin:8px 0 4px;}
+.kHit{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px dashed var(--line);font-size:13px;}
+.kHit .kHitName{flex:1;min-width:0;}
+.kHit .kHitMeta{color:var(--muted);font-size:12px;}
 .kBtns{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;}
 button.kDanger{background:transparent;border:1px solid var(--warn);color:var(--warn);}
 .kToast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--amber);color:#1a1406;padding:9px 16px;border-radius:20px;font-size:13px;font-weight:600;z-index:60;box-shadow:0 4px 14px rgba(0,0,0,.4);}
@@ -919,16 +923,18 @@ function kasirAddItem(rec){
   if(ex) ex.qty += 1;
   else t.items.push({key, no: rec.itemNo, ds: rec.deskripsi, base: price, price, qty: 1, sn: ''});
   kasirSave(); kasirUpdateBadge();
+  if(document.getElementById('kBody')){ kasirRenderTabs(); kasirRenderBody(); }
   kasirToast('Ditambahkan ke Transaksi '+(k.txns.indexOf(t)+1)+' ('+(ex ? 'qty '+ex.qty : 'baru')+')');
 }
 function kasirCalc(t){
   const sub = t.items.reduce((a,i)=> a + (Number(i.price)||0) * (Number(i.qty)||0), 0);
+  // disc positif = potongan nego; disc negatif (ketik "-") = biaya admin yang ditambahkan ke total
   let disc = Number(t.disc)||0;
-  if(t.discType === 'pct') disc = Math.round(sub * Math.min(Math.max(disc,0),100) / 100);
-  disc = Math.min(Math.max(disc,0), sub);
+  if(t.discType === 'pct') disc = Math.round(sub * Math.min(Math.max(disc,-100),100) / 100);
+  disc = Math.min(disc, sub);
   return {sub, disc, total: sub - disc};
 }
-function kasirRp(n){ return 'Rp' + (Number(n)||0).toLocaleString('id-ID'); }
+function kasirRp(n){ n = Number(n)||0; return (n<0?'-':'') + 'Rp' + Math.abs(n).toLocaleString('id-ID'); }
 function kasirSummaryText(t){
   const c = kasirCalc(t);
   const lines = [];
@@ -936,16 +942,20 @@ function kasirSummaryText(t){
   t.items.forEach((i,n)=>{
     lines.push((n+1)+'. '+i.ds+' ('+i.no+') x'+i.qty+' @'+kasirRp(i.price)+' = '+kasirRp(i.price*i.qty)+(i.sn ? ' | SN/Ket: '+i.sn : ''));
   });
-  if(c.disc) lines.push('Potongan: '+kasirRp(c.disc)+(t.discType==='pct' ? ' ('+t.disc+'%)' : ''));
+  if(c.disc > 0) lines.push('Potongan: '+kasirRp(c.disc)+(t.discType==='pct' ? ' ('+t.disc+'%)' : ''));
+  if(c.disc < 0) lines.push('Biaya admin: +'+kasirRp(-c.disc)+(t.discType==='pct' ? ' ('+(-t.disc)+'%)' : ''));
   lines.push('TOTAL: '+kasirRp(c.total));
   if(t.note) lines.push('Catatan: '+t.note);
   return lines.join('\n');
 }
+let _kQuery = '', _kHits = [], _kTimer = null;
 function kasirView(){
   return `<div class="card">
     <h2>Kasir</h2>
     <div class="hint">Catatan untuk membantu input ke komputer. <b>Tidak mengurangi stok.</b> Tersimpan di perangkat ini saja. Tambah item lewat tombol <b>+ Kasir</b> di tab Cek Stok.</div>
     <div class="tabs catRow" id="kTabs"></div>
+    <input type="text" id="kSearch" placeholder="Cari item untuk ditambahkan ke transaksi aktif..." autocomplete="off" value="${escHtml(_kQuery)}">
+    <div id="kSearchRes" class="kSearchRes"></div>
     <div id="kBody"></div>
   </div>`;
 }
@@ -961,10 +971,11 @@ function kasirRenderTabs(){
     };
   });
 }
+function kasirDiscText(c){ return c.disc < 0 ? '+'+kasirRp(-c.disc) : '-'+kasirRp(c.disc); }
 function kasirUpdateTotals(t){
   const c = kasirCalc(t);
   const set = (id,v)=>{ const e = document.getElementById(id); if(e) e.textContent = v; };
-  set('kSubtotal', kasirRp(c.sub)); set('kDiscAmt', '-'+kasirRp(c.disc)); set('kTotal', kasirRp(c.total));
+  set('kSubtotal', kasirRp(c.sub)); set('kDiscAmt', kasirDiscText(c)); set('kDiscLabel', c.disc < 0 ? 'Biaya admin' : 'Potongan (nego)'); set('kTotal', kasirRp(c.total));
   t.items.forEach(i=> set('kSub_'+i.key.replace(/[^A-Za-z0-9]/g,'_'), kasirRp((Number(i.price)||0)*(Number(i.qty)||0))));
   kasirRenderTabsLabelsOnly();
 }
@@ -1003,10 +1014,12 @@ function kasirRenderBody(){
     ${rows}
     <div class="kTotals">
       <div class="kLine"><span>Subtotal</span><span class="kSub" id="kSubtotal">${kasirRp(c.sub)}</span></div>
-      <div class="kLine"><span>Potongan (nego)</span>
-        <input type="number" inputmode="numeric" min="0" id="kDisc" style="width:110px;" value="${t.disc||''}" placeholder="0">
+      <div class="kLine"><span id="kDiscLabel">${c.disc < 0 ? 'Biaya admin' : 'Potongan (nego)'}</span>
+        <input type="text" inputmode="decimal" id="kDisc" style="width:110px;" value="${t.disc||''}" placeholder="0">
+        <button class="small ghost" type="button" id="kSign" title="Ganti tanda: potongan (+) / biaya admin (-)">&plusmn;</button>
         <select id="kDiscType"><option value="rp" ${t.discType==='rp'?'selected':''}>Rp</option><option value="pct" ${t.discType==='pct'?'selected':''}>%</option></select>
-        <span class="kSub" id="kDiscAmt">-${kasirRp(c.disc)}</span></div>
+        <span class="kSub" id="kDiscAmt">${kasirDiscText(c)}</span></div>
+      <div class="muted" style="font-size:12px;">Isi angka untuk potongan nego. Ketik tanda minus (-) di depan, atau tekan &plusmn;, untuk biaya admin yang ditambahkan ke total.</div>
       <div class="kLine"><span><b>TOTAL</b></span><span class="kSub kBig" id="kTotal">${kasirRp(c.total)}</span></div>
     </div>
     <input type="text" id="kNote" placeholder="Catatan (nama pembeli, dll)" value="${escHtml(t.note)}" style="margin-top:10px;">
@@ -1019,7 +1032,14 @@ function kasirRenderBody(){
   sel('kSales', e=>{ t.sales = e.target.value; kasirSave(); kasirRenderTabsLabelsOnly(); });
   sel('kBayar', e=>{ t.bayar = e.target.value; kasirSave(); });
   sel('kDiscType', e=>{ t.discType = e.target.value; kasirSave(); kasirUpdateTotals(t); });
-  document.getElementById('kDisc').oninput = e=>{ t.disc = Number(e.target.value)||0; kasirSave(); kasirUpdateTotals(t); };
+  const discEl = document.getElementById('kDisc');
+  discEl.oninput = e=>{
+    const raw = e.target.value.replace(',', '.');
+    if(raw === '-' ) { t.disc = 0; return; } // sedang mengetik tanda minus
+    const n = Number(raw.replace(/[^0-9.\-]/g,''));
+    t.disc = isNaN(n) ? 0 : n; kasirSave(); kasirUpdateTotals(t);
+  };
+  document.getElementById('kSign').onclick = ()=>{ t.disc = -(Number(t.disc)||0); discEl.value = t.disc || ''; kasirSave(); kasirUpdateTotals(t); };
   document.getElementById('kNote').oninput = e=>{ t.note = e.target.value; kasirSave(); };
   body.querySelectorAll('.kRow').forEach(row=>{
     const it = t.items.find(i=>i.key===row.dataset.key); if(!it) return;
@@ -1049,7 +1069,30 @@ function kasirRenderBody(){
     if(!t.items.length || confirm('Batalkan transaksi ini? Catatan akan dihapus.')) removeTxn();
   };
 }
-function bindKasir(){ kasirRenderTabs(); kasirRenderBody(); }
+function kasirRenderHits(){
+  const box = document.getElementById('kSearchRes'); if(!box) return;
+  const q = _kQuery.trim();
+  if(!q){ box.innerHTML = ''; _kHits = []; return; }
+  _kHits = buildResults(q).slice(0, 8);
+  if(!_kHits.length){ box.innerHTML = '<div class="muted">Tidak ditemukan.</div>'; return; }
+  const stLabel = {'ready':'Ready','ready-indent':'Ready-Indent','indent':'Indent','':'Kosong'};
+  box.innerHTML = _kHits.map((r,i)=>{
+    const stok = r.plRows.reduce((a,x)=>a+(Number(x.available)||0),0);
+    const price = recPrice(r);
+    return `<div class="kHit"><div class="kHitName">${escHtml(r.deskripsi)} <span class="itemNo">(${escHtml(r.itemNo)})</span>
+      <div class="kHitMeta">${price ? kasirRp(price) : 'Harga belum ada'} &middot; ${stLabel[recStatus(r)]}${stok ? ' &middot; stok '+stok : ''}</div></div>
+      <button class="small kHitAdd" data-i="${i}" type="button">+ Tambah</button></div>`;
+  }).join('');
+}
+function bindKasir(){
+  kasirRenderTabs(); kasirRenderBody(); kasirRenderHits();
+  const inp = document.getElementById('kSearch');
+  inp.oninput = ()=>{ _kQuery = inp.value; clearTimeout(_kTimer); _kTimer = setTimeout(kasirRenderHits, 200); };
+  document.getElementById('kSearchRes').onclick = (e)=>{
+    const b = e.target.closest && e.target.closest('.kHitAdd'); if(!b) return;
+    const rec = _kHits[Number(b.dataset.i)]; if(rec) kasirAddItem(rec);
+  };
+}
 
 function uploadView(){
   return `<div class="card">
