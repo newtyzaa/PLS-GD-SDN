@@ -274,12 +274,25 @@ async function loadAll(){
 }
 
 function buildIndices(){
-  state.items.forEach(it=>{ it._noL = it.itemNo.toLowerCase(); it._dsL = it.deskripsi.toLowerCase(); });
+  // Price list baru hanya berisi {itemNo, harga}. Baris format lama (punya gudang/available) tetap dibaca sebagai cadangan.
+  const priceMap = {};
+  const legacy = {};
+  state.items.forEach(it=>{
+    if(it.harga > 0 && !(it.itemNo in priceMap)) priceMap[it.itemNo] = it.harga;
+    if(it.gudang !== undefined){
+      it._noL = it.itemNo.toLowerCase(); it._dsL = (it.deskripsi||'').toLowerCase();
+      (legacy[it.itemNo] = legacy[it.itemNo] || []).push(it);
+    }
+  });
+  state.priceMap = priceMap;
   state.serialNumber.forEach(sn=>{ sn._codeL = sn.itemCode.toLowerCase(); sn._dsL = sn.deskripsi.toLowerCase(); sn._snL = sn.serial.toLowerCase(); });
-  state.stockCabang.forEach(sc=>{ sc._noL = sc.itemNo.toLowerCase(); sc._dsL = sc.deskripsi.toLowerCase(); });
+  state.stockCabang.forEach(sc=>{
+    if(!sc.own && !sc.other && sc.gudang) sc.other = [{g: sc.gudang, a: null}]; // data format lama
+    sc._noL = sc.itemNo.toLowerCase(); sc._dsL = (sc.deskripsi||'').toLowerCase();
+  });
   state.barcode.forEach(bc=>{ bc._noL = bc.itemNo.toLowerCase(); bc._dsL = bc.deskripsi.toLowerCase(); bc._bcL = bc.barcode.toLowerCase(); });
   state.manualSupport.forEach(m=>{ m._dsL = m.deskripsi.toLowerCase(); m._bcL = (m.barcode||'').toLowerCase(); });
-  const idx1 = {}; state.items.forEach(it=>{ (idx1[it.itemNo] = idx1[it.itemNo] || []).push(it); });
+  const idx1 = legacy;
   const idx2 = {}; state.serialNumber.forEach(sn=>{ (idx2[sn.itemCode] = idx2[sn.itemCode] || []).push(sn); });
   const idx3 = {}; state.stockCabang.forEach(sc=>{ (idx3[sc.itemNo] = idx3[sc.itemNo] || []).push(sc); });
   const idx4 = {}; state.barcode.forEach(bc=>{ (idx4[bc.itemNo] = idx4[bc.itemNo] || []).push(bc); });
@@ -288,7 +301,7 @@ function buildIndices(){
 
   // deskripsi yang sudah "dikenal" lewat Item No. asli (dari salah satu sumber data utama)
   const known = new Set();
-  state.items.forEach(it=> known.add(it._dsL));
+  state.items.forEach(it=>{ if(it._dsL !== undefined) known.add(it._dsL); });
   state.serialNumber.forEach(sn=> known.add(sn._dsL));
   state.stockCabang.forEach(sc=> known.add(sc._dsL));
   state.barcode.forEach(bc=> known.add(bc._dsL));
@@ -446,7 +459,7 @@ function itemJenis(desc){
 }
 function recPrice(rec){
   const row = rec.plRows.find(r=> (r.harga||0) > 0);
-  return row ? row.harga : (rec.manualHarga || 0);
+  return row ? row.harga : (rec.price || rec.manualHarga || 0);
 }
 function recStatus(rec){
   const ready = rec.plRows.some(r=> (r.available||0) > 0);
@@ -513,9 +526,15 @@ function bindFilterChips(){
     refreshFilterUi(); runSearchAndRenderBody();
   };
 }
+function ownStockRows(){
+  const out = [];
+  state.stockCabang.forEach(sc=> (sc.own||[]).forEach(o=> out.push({itemNo: sc.itemNo, deskripsi: sc.deskripsi, gudang: o.g, available: o.a})));
+  if(out.length) return out;
+  return state.items.filter(it=> it.gudang !== undefined).map(it=>({itemNo: it.itemNo, deskripsi: it.deskripsi, gudang: it.gudang, available: it.available}));
+}
 function getGadBrands(){
   const set = new Set();
-  state.items.forEach(it=>{
+  ownStockRows().forEach(it=>{
     const parts = it.itemNo.split('.');
     if(parts[0]==='GAD' && parts[1]) set.add(parts[1]);
   });
@@ -523,7 +542,7 @@ function getGadBrands(){
 }
 function promotorRows(brand){
   const prefix = 'GAD.'+brand+'.';
-  return state.items
+  return ownStockRows()
     .filter(it=> it.itemNo.startsWith(prefix) && it.available > 0)
     .map(it=>({ deskripsi: it.deskripsi, gudang: it.gudang, available: it.available }))
     .sort((a,b)=> a.deskripsi.localeCompare(b.deskripsi) || a.gudang.localeCompare(b.gudang));
@@ -543,7 +562,7 @@ function promotorView(){
   return `<div class="card">
     <h2>Stock Promotor &mdash; Gadget (GAD)</h2>
     <div class="hint">Pilih brand untuk melihat stock yang ready di gudang sendiri.</div>
-    <div class="tabs catRow" id="brandChips">${chips || '<span class="muted">Belum ada data Price List.</span>'}</div>
+    <div class="tabs catRow" id="brandChips">${chips || '<span class="muted">Belum ada data stok.</span>'}</div>
     ${tableHtml}
   </div>`;
 }
@@ -557,7 +576,7 @@ function stokHintHtml(){
   const loadingNote = state.pending > 0 ? '<div class="loadNote">Memeriksa data terbaru... hasil bisa belum lengkap.</div>' : (state.loadFail ? '<div class="loadNote">Sebagian data gagal dimuat, coba muat ulang halaman.</div>' : '');
   return `${state.itemsUpdated ? 'Price list: '+state.itemsUpdated : 'Price list belum ada.'}
       ${state.serialUpdated ? ' &middot; Serial: '+state.serialUpdated : ''}
-      ${state.cabangUpdated ? ' &middot; Cabang lain: '+state.cabangUpdated : ''}
+      ${state.cabangUpdated ? ' &middot; Stock: '+state.cabangUpdated : ''}
       ${state.manualSupportUpdated ? ' &middot; Pendukung manual: '+state.manualSupportUpdated : ''}
       ${state.barcodeUpdated ? ' &middot; Barcode: '+state.barcodeUpdated : ''}${loadingNote}`;
 }
@@ -589,7 +608,7 @@ function buildResults(q){
   let keySet, manualOnlyKeys = [];
   if(q){
     keySet = new Set();
-    state.items.forEach(it=>{ if(it._noL.includes(q)||it._dsL.includes(q)) keySet.add(it.itemNo); });
+    state.items.forEach(it=>{ if(it._noL !== undefined && (it._noL.includes(q)||it._dsL.includes(q))) keySet.add(it.itemNo); });
     state.serialNumber.forEach(sn=>{ if(sn._codeL.includes(q)||sn._dsL.includes(q)||sn._snL.includes(q)) keySet.add(sn.itemCode); });
     state.stockCabang.forEach(sc=>{ if(sc._noL.includes(q)||sc._dsL.includes(q)) keySet.add(sc.itemNo); });
     state.barcode.forEach(bc=>{ if(bc._noL.includes(q)||bc._dsL.includes(q)||bc._bcL.includes(q)) keySet.add(bc.itemNo); });
@@ -612,35 +631,49 @@ function buildResults(q){
     });
   }
   const results = keys.map(itemNo=>{
-    const plRows = state.itemsIndex[itemNo] || [];
     const snRows = state.serialIndex[itemNo] || [];
     const scRows = state.cabangIndex[itemNo] || [];
     const bcRows = state.barcodeIndex[itemNo] || [];
-    const deskripsi = (plRows[0]&&plRows[0].deskripsi) || (snRows[0]&&snRows[0].deskripsi) || (scRows[0]&&scRows[0].deskripsi) || (bcRows[0]&&bcRows[0].deskripsi) || '';
+    const legacyRows = state.itemsIndex[itemNo] || [];
+    const deskripsi = (scRows[0]&&scRows[0].deskripsi) || (snRows[0]&&snRows[0].deskripsi) || (bcRows[0]&&bcRows[0].deskripsi) || (legacyRows[0]&&legacyRows[0].deskripsi) || '';
     let barcode = bcRows[0] ? bcRows[0].barcode : '';
     let barcodeFromManual = false;
-    const ownByGudang = {}; const otherGudang = new Set();
+    const ownByGudang = {};
+    const otherGudang = new Map(); // kode gudang -> jumlah available (null kalau tidak diketahui)
+    const addOther = (g, a)=>{
+      if(a == null){ if(!otherGudang.has(g)) otherGudang.set(g, null); }
+      else otherGudang.set(g, (otherGudang.get(g)||0) + a);
+    };
     snRows.forEach(sn=>{
       if(OWN_WAREHOUSES.includes(sn.gudang)) (ownByGudang[sn.gudang]=ownByGudang[sn.gudang]||[]).push(sn);
-      else if(sn.gudang) otherGudang.add(sn.gudang);
+      else if(sn.gudang) addOther(sn.gudang, null);
     });
-    scRows.forEach(sc=>{ if(sc.gudang) otherGudang.add(sc.gudang); });
-    // lengkapi dari file manual: barcode jika belum ada, dan harga referensi jika tidak ready di gudang sendiri
+    const price = state.priceMap[itemNo] || 0;
+    const ownStock = [];
+    scRows.forEach(sc=>{
+      (sc.own||[]).forEach(o=> ownStock.push({gudang:o.g, available:o.a, allocated:o.al}));
+      (sc.other||[]).forEach(o=> addOther(o.g, o.a));
+    });
+    // lengkapi dari file manual: barcode jika belum ada, dan harga referensi jika harga resmi tidak ada
     let manualHarga = 0;
     const manualEntry = deskripsi ? state.manualIndex[deskripsi.toLowerCase()] : null;
     if(manualEntry){
       if(!barcode && manualEntry.barcode){ barcode = manualEntry.barcode; barcodeFromManual = true; }
-      if(!plRows.length && manualEntry.harga) manualHarga = manualEntry.harga;
-      (manualEntry.gudangList||[]).forEach(g=> otherGudang.add(g));
+      if(!price && manualEntry.harga) manualHarga = manualEntry.harga;
+      (manualEntry.gudangList||[]).forEach(g=> addOther(g, null));
     }
-    return {itemNo, deskripsi, barcode, barcodeFromManual, manualHarga, plRows, ownByGudang, otherGudang};
+    const effPrice = price || manualHarga;
+    const plRows = ownStock.length
+      ? ownStock.map(o=> Object.assign({}, o, {harga: effPrice}))
+      : legacyRows.map(p=> Object.assign({}, p, {harga: effPrice || p.harga}));
+    return {itemNo, deskripsi, barcode, barcodeFromManual, price, manualHarga, plRows, ownByGudang, otherGudang};
   });
   const manualOnlyResults = manualOnlyKeys.map(key=>{
     const dsL = key.slice('MANUAL::'.length);
     const m = state.manualIndex[dsL];
     return {
       itemNo: '(data manual)', deskripsi: m.deskripsi, barcode: m.barcode, barcodeFromManual: !!m.barcode,
-      manualHarga: m.harga||0, plRows: [], ownByGudang: {}, otherGudang: new Set(m.gudangList||[]), manualOnly: true
+      price: 0, manualHarga: m.harga||0, plRows: [], ownByGudang: {}, otherGudang: new Map((m.gudangList||[]).map(g=>[g,null])), manualOnly: true
     };
   });
   // item "data manual" tidak punya Item No. asli, jadi tidak ikut filter brand/tipe, tapi tetap bisa difilter jenis
@@ -662,7 +695,7 @@ function itemCardHtml(rec){
       <thead><tr><th>Warehouse Code</th><th>Available</th><th>Allocated</th><th>Harga</th></tr></thead>
       <tbody>${rec.plRows.map(it=>`<tr><td>${it.gudang}</td><td>${it.available}</td><td>${it.allocated}</td>
         <td>Rp${Number(it.harga||0).toLocaleString('id-ID')}</td></tr>`).join('')}</tbody>
-    </table></div>` : `<div class="muted">Tidak ada di price list gudang sendiri.${rec.manualHarga ? ` Harga referensi (manual): Rp${Number(rec.manualHarga).toLocaleString('id-ID')}` : ''}</div>`;
+    </table></div>` : `<div class="muted">Tidak ada stok di gudang sendiri.</div>${(rec.price||rec.manualHarga) ? `<div style="margin:2px 0 10px;font-weight:600;">Harga: Rp${Number(rec.price||rec.manualHarga).toLocaleString('id-ID')}${rec.price ? '' : ' <span class="muted">(referensi manual)</span>'}</div>` : ''}`;
   const ownSerialBlocks = Object.keys(rec.ownByGudang).map(gudang=>{
     const list = rec.ownByGudang[gudang].slice().sort((a,b)=>{
       const da=parseTgl(a.tanggal), db_=parseTgl(b.tanggal); return (da&&db_) ? da-db_ : 0;
@@ -678,14 +711,14 @@ function itemCardHtml(rec){
     return `<div class="snGroupLabel">Serial Number &mdash; ${gudang}</div><div class="snList">${chips}</div>`;
   }).join('');
   const hasReadyOwn = rec.plRows.some(r=> (r.available||0) > 0);
-  const indentList = Array.from(rec.otherGudang).join(', ');
+  const indentList = Array.from(rec.otherGudang.entries()).map(([g,a])=> a != null ? `${g} (${a})` : g).join(', ');
   const indent = rec.otherGudang.size ? (
     hasReadyOwn
       ? `<details class="indentDetails"><summary>Status: Indent (klik untuk lihat gudang lain)</summary><div class="indentList">Tersedia di gudang: ${indentList}</div></details>`
       : `<div class="indentBox">Status: Indent &mdash; tersedia di gudang: ${indentList}</div>`
   ) : '';
   const barcodeLine = rec.barcode ? `<div class="muted" style="margin:-4px 0 10px;">Barcode: ${rec.barcode}${rec.barcodeFromManual ? ' (manual)' : ''}</div>` : '';
-  const body = rec.manualOnly ? `${barcodeLine}${rec.manualHarga ? `<div class="muted" style="margin:-4px 0 10px;">Harga referensi (manual): Rp${Number(rec.manualHarga).toLocaleString('id-ID')}</div>` : ''}${indent}`
+  const body = rec.manualOnly ? `${barcodeLine}${rec.manualHarga ? `<div style="margin:2px 0 10px;font-weight:600;">Harga: Rp${Number(rec.manualHarga).toLocaleString('id-ID')} <span class="muted">(referensi manual)</span></div>` : ''}${indent}`
     : `${barcodeLine}${plTable}${ownSerialBlocks}${indent}`;
   return `<div class="itemCard"><h3>${rec.deskripsi} <span class="itemNo">(${rec.itemNo})</span></h3>${body}</div>`;
 }
@@ -721,9 +754,9 @@ function bindStok(){
 }
 
 function comboSummaryHtml(){
-  return `Price List: ${state.itemsUpdated ? state.itemsUpdated+' ('+state.items.length+' baris)' : '-'}<br>
+  return `Price List (Reborn): ${state.itemsUpdated ? state.itemsUpdated+' ('+state.items.length+' item berharga)' : '-'}<br>
     Serial Number: ${state.serialUpdated ? state.serialUpdated+' ('+state.serialNumber.length+' baris)' : '-'}<br>
-    Stock Cabang Lain: ${state.cabangUpdated ? state.cabangUpdated+' ('+state.stockCabang.length+' baris gudang lain)' : '-'}`;
+    Stock Available: ${state.cabangUpdated ? state.cabangUpdated+' ('+state.stockCabang.length+' item)' : '-'}`;
 }
 // ---------- Skema Leasing (khusus mode staff) ----------
 function skemaStatus(v, e){
@@ -808,8 +841,8 @@ function bindSkema(){
 function uploadView(){
   return `<div class="card">
     <div class="uploadBlock">
-      <h3>1. Price List, Serial Number & Stock Cabang Lain</h3>
-      <div class="hint">Pilih langsung 1-3 file sekaligus (boleh sebagian) \u2014 jenisnya dikenali otomatis dari nama kolom di tiap file. Kalau ada file yang tidak dikenali jenisnya, semua upload pada batch ini dibatalkan.</div>
+      <h3>1. Price List (Reborn), Serial Number & Stock Available</h3>
+      <div class="hint">Pilih langsung 1-3 file sekaligus (boleh sebagian) \u2014 jenisnya dikenali otomatis. <b>Price List:</b> file Reborn_PriceList (kolom Item No., Retail). <b>Stock Available:</b> nama file mengandung "Stock Available" (stok gudang sendiri + cabang lain). <b>Serial Number:</b> file SN. Kalau ada file yang tidak dikenali, semua upload pada batch ini dibatalkan.</div>
       <input type="file" id="fileInputCombo" accept=".xlsx,.xls,.csv" multiple>
       <div id="msgCombo" class="muted"></div>
       <div id="comboSummary" class="muted" style="margin-top:8px;line-height:1.6;">${comboSummaryHtml()}</div>
@@ -852,14 +885,17 @@ const _xlsxWorkerCode = `
     return isNaN(n) ? 0 : n;
   }
   function transform(kind, rows){
-    if(kind === 'priceList') return rows.map(r=>({
-      itemNo: String(pick(r,['Item No.','Item No'])||'').trim(),
-      deskripsi: String(pick(r,['Item Description'])||'').trim(),
-      gudang: pick(r,['Warehouse Code']) || '',
-      available: toNumber(pick(r,['Available'])),
-      allocated: toNumber(pick(r,['Allocated'])),
-      harga: toNumber(pick(r,['List Price']))
-    })).filter(r=>r.itemNo || r.deskripsi);
+    if(kind === 'priceList'){
+      // File Reborn_PriceList: ambil harga dari kolom Retail (cadangan: Retail-AMT). Item tanpa harga dibuang.
+      const out = [];
+      rows.forEach(r=>{
+        const itemNo = String(pick(r,['Item No.','Item No'])||'').trim();
+        let harga = toNumber(pick(r,['Retail']));
+        if(!harga) harga = toNumber(pick(r,['Retail-AMT']));
+        if(itemNo && harga > 0) out.push({itemNo, harga});
+      });
+      return out;
+    }
     if(kind === 'serialNumber') return rows.map(r=>({
       itemCode: String(pick(r,['Item Code'])||'').trim(),
       deskripsi: String(pick(r,['Item Description'])||'').trim(),
@@ -868,11 +904,26 @@ const _xlsxWorkerCode = `
       gudang: String(pick(r,['Warehouse Code'])||'').trim(),
       status: String(pick(r,['Status'])||'').trim()
     })).filter(r=>r.itemCode);
-    if(kind === 'stockCabang') return rows.map(r=>({
-      itemNo: String(pick(r,['Item No.','Item No'])||'').trim(),
-      deskripsi: String(pick(r,['Item Description'])||'').trim(),
-      gudang: String(pick(r,['Warehouse Code'])||'').trim()
-    })).filter(r=>r.itemNo && !OWN_WAREHOUSES.includes(r.gudang));
+    if(kind === 'stockCabang'){
+      // File Stock Available: digabung per item. Gudang sendiri -> own (available & allocated),
+      // cabang lain -> other (hanya yang Available > 0).
+      const ownSet = new Set(OWN_WAREHOUSES);
+      const map = {}; const order = [];
+      rows.forEach(r=>{
+        const itemNo = String(pick(r,['Item No.','Item No'])||'').trim();
+        const g = String(pick(r,['Warehouse Code'])||'').trim();
+        if(!itemNo || !g) return;
+        const av = toNumber(pick(r,['Available']));
+        const al = toNumber(pick(r,['Allocated']));
+        const isOwn = ownSet.has(g);
+        if(!isOwn && av <= 0) return;
+        let rec = map[itemNo];
+        if(!rec){ rec = map[itemNo] = {itemNo, deskripsi: String(pick(r,['Item Description'])||'').trim()}; order.push(rec); }
+        if(isOwn){ (rec.own = rec.own || []).push({g, a: av, al}); }
+        else { (rec.other = rec.other || []).push({g, a: av}); }
+      });
+      return order;
+    }
     if(kind === 'barcode') return rows.map(r=>({
       itemNo: String(pick(r,['Item No.','Item No'])||'').trim(),
       deskripsi: String(pick(r,['Item Description'])||'').trim(),
@@ -946,10 +997,11 @@ const _xlsxWorkerCode = `
   }
   function detectKind(headers, fileName){
     const name = String(fileName||'').toLowerCase();
-    if(name.includes('stock opname - stock available')) return 'stockCabang';
+    if(name.includes('stock available')) return 'stockCabang';
     const norm = s => String(s).trim().toLowerCase().replace(/\\s+/g,' ');
     const set = new Set(headers.map(norm));
-    if(set.has('list price')) return 'priceList';
+    if(set.has('retail') && set.has('gro-1')) return 'priceList';
+    if(set.has('list price')) return null; // format price list lama sudah tidak dipakai
     if(set.has('serial number') || set.has('admission date')) return 'serialNumber';
     if(set.has('warehouse code') && (set.has('item no.') || set.has('item no'))) return 'stockCabang';
     return null;
@@ -1034,19 +1086,19 @@ function bindUpload(){
           return;
         }
         // semua file valid & jenisnya unik -> upload satu per satu
-        const labels = {priceList:'Price List', serialNumber:'Serial Number', stockCabang:'Stock Cabang Lain'};
+        const labels = {priceList:'Price List', serialNumber:'Serial Number', stockCabang:'Stock Available'};
         for(const r of results){
           msg.style.color = 'var(--muted)';
           msg.textContent = `Mengunggah ${labels[r.kind]} (${r.rows.length} baris)...`;
           const progressCb = (done,total)=>{ msg.textContent = `Mengunggah ${labels[r.kind]}... bagian ${done}/${total}`; };
           if(r.kind === 'priceList'){
-            const updatedAt = await pushToFirestore('priceList', r.rows, 'priceList');
+            const updatedAt = await pushToFirestore('priceList', r.rows, 'priceList', progressCb);
             state.items = r.rows; state.itemsUpdated = fmtDate(updatedAt);
           } else if(r.kind === 'serialNumber'){
             const updatedAt = await pushToFirestore('serialNumber', r.rows, 'serialNumber', progressCb);
             state.serialNumber = r.rows; state.serialUpdated = fmtDate(updatedAt);
           } else if(r.kind === 'stockCabang'){
-            const updatedAt = await pushToFirestore('stockCabang', r.rows, 'stockCabang', progressCb);
+            const updatedAt = await pushToFirestore('stockCabang', r.rows, 'stockCabang', progressCb, 1500);
             state.stockCabang = r.rows; state.cabangUpdated = fmtDate(updatedAt);
           }
         }
