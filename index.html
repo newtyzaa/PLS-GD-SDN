@@ -418,12 +418,16 @@ function memoFilterOptions(){
   return _catMemo;
 }
 function getCategories(){ return memoFilterOptions().cats; }
-const BRAND_NAMES = {APL:'Apple',SAM:'Samsung',XMI:'Xiaomi',IFX:'Infinix',VIV:'Vivo',OPO:'Oppo',HWI:'Huawei',RLM:'Realme',TCN:'Tecno',ANK:'Anker',ADV:'Advan',UNI:'Universal'};
+const BRAND_NAMES = {SAM:'Samsung',OPO:'Oppo',VIV:'Vivo',XMI:'Xiaomi',IFX:'Infinix',APL:'Apple',HWI:'Huawei',RLM:'Realme',TCN:'Tecno',RAP:'RAPA',RBT:'Robot',UGR:'Ugreen'};
+const MAIN_BRANDS = ['SAM','OPO','VIV','XMI','IFX','APL','HWI','RLM','TCN','RAP','RBT','UGR']; // brand lain digabung ke tombol "Other"
+
 const JENIS_OPTS = [
   {id:'charger', label:'Charger (TC)',  tok:['TC']},
   {id:'laptop',  label:'Laptop (NB)',   tok:['NB']},
   {id:'case',    label:'Case (SLK/FC)', tok:['SLK','FC']},
-  {id:'headset', label:'Headset (HF)',  tok:['HF']}
+  {id:'headset', label:'Headset (HF)',  tok:['HF']},
+  {id:'powerbank', label:'Power Bank (BATT)', tok:['BATT']},
+  {id:'kabel',   label:'Kabel (KCC/KAC/KAL/KCL/KAM)', tok:['KCC','KAC','KAL','KCL','KAM']}
 ];
 // batas atas inklusif, dalam rupiah
 const HARGA_OPTS = [
@@ -472,7 +476,7 @@ function filterCount(){
 }
 function filtersActive(){ return filterCount() > 0; }
 function optLabel(group, v){
-  if(group==='brand') return BRAND_NAMES[v] ? v+' - '+BRAND_NAMES[v] : v;
+  if(group==='brand') return v==='__other' ? 'Other' : (BRAND_NAMES[v] ? v+'-'+BRAND_NAMES[v] : v);
   if(group==='tipe') return v==='GAD-LDU' ? 'GAD LDU' : v;
   const list = group==='jenis' ? JENIS_OPTS : group==='harga' ? HARGA_OPTS : group==='status' ? STATUS_OPTS : null;
   if(list){ const o = list.find(x=>x.id===v); return o ? o.label : v; }
@@ -490,7 +494,7 @@ function filterChip(group, id, label){
 function filterPanelHtml(){
   const opts = memoFilterOptions();
   const grp = (title, group, items)=> items.length ? `<div class="fgTitle">${title}</div><div class="tabs">${items.map(([id,l])=>filterChip(group,id,l)).join('')}</div>` : '';
-  return grp('Brand','brand', opts.brands.map(b=>[b,optLabel('brand',b)]))
+  return grp('Brand','brand', MAIN_BRANDS.filter(b=>opts.brands.includes(b)).map(b=>[b,optLabel('brand',b)]).concat(opts.brands.some(b=>!MAIN_BRANDS.includes(b)) ? [['__other','Other']] : []))
     + grp('Jenis','jenis', JENIS_OPTS.map(o=>[o.id,o.label]))
     + grp('Tipe','tipe', opts.cats.map(c=>[c,optLabel('tipe',c)]))
     + grp('Range harga','harga', HARGA_OPTS.map(o=>[o.id,o.label]))
@@ -632,7 +636,10 @@ function buildResults(q){
     keys = keys.filter(k=>{
       const desc = descOfKey(k);
       if(F.tipe.length && !F.tipe.includes(itemTipe(k, desc))) return false;
-      if(F.brand.length && !F.brand.includes(k.split('.')[1])) return false;
+      if(F.brand.length){
+        const b = k.split('.')[1];
+        if(!(F.brand.includes(b) || (F.brand.includes('__other') && !MAIN_BRANDS.includes(b)))) return false;
+      }
       if(F.jenis.length && !itemJenis(desc).some(j=>F.jenis.includes(j))) return false;
       return true;
     });
