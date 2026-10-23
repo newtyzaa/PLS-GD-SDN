@@ -574,7 +574,14 @@ function bindPromotor(){
 
 function stokHintHtml(){
   const loadingNote = state.pending > 0 ? '<div class="loadNote">Memeriksa data terbaru... hasil bisa belum lengkap.</div>' : (state.loadFail ? '<div class="loadNote">Sebagian data gagal dimuat, coba muat ulang halaman.</div>' : '');
-  return `${state.itemsUpdated ? 'Price list: '+state.itemsUpdated : 'Price list belum ada.'}
+  let oldNote = '';
+  if(state.staffMode && state.pending === 0){
+    const miss = [];
+    if(state.stockCabang.length && !state.stockCabang.some(sc=> sc.own)) miss.push('Stock Available');
+    if(state.items.length && state.items.some(it=> it.gudang !== undefined)) miss.push('Reborn_PriceList');
+    if(miss.length) oldNote = `<div class="loadNote">Data ${miss.join(' & ')} masih format lama \u2014 upload ulang filenya di tab Upload Excel supaya stok & filter Status akurat.</div>`;
+  }
+  return `${oldNote}${state.itemsUpdated ? 'Price list: '+state.itemsUpdated : 'Price list belum ada.'}
       ${state.serialUpdated ? ' &middot; Serial: '+state.serialUpdated : ''}
       ${state.cabangUpdated ? ' &middot; Stock: '+state.cabangUpdated : ''}
       ${state.manualSupportUpdated ? ' &middot; Pendukung manual: '+state.manualSupportUpdated : ''}
