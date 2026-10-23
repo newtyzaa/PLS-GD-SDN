@@ -890,6 +890,9 @@ function kasirData(){
   if(_kasir) return _kasir;
   try{ const raw = localStorage.getItem(KASIR_KEY); _kasir = raw ? JSON.parse(raw) : null; }catch(e){ _kasir = null; }
   if(!_kasir || !Array.isArray(_kasir.txns)) _kasir = {txns: [], active: null};
+  _kasir.txns.forEach(t=>{ // data lama: potongan negatif = biaya admin
+    if(t.admin === undefined){ t.admin = 0; t.adminType = t.discType || 'rp'; if((Number(t.disc)||0) < 0){ t.admin = -t.disc; t.disc = 0; } }
+  });
   return _kasir;
 }
 function kasirSave(){ try{ localStorage.setItem(KASIR_KEY, JSON.stringify(_kasir)); }catch(e){} }
@@ -900,7 +903,7 @@ function kasirUpdateBadge(){
 }
 function kasirNewTxn(){
   const k = kasirData();
-  const t = {id: Date.now().toString(36)+Math.random().toString(36).slice(2,6), sales:'', bayar:'', items:[], disc:0, discType:'rp', note:''};
+  const t = {id: Date.now().toString(36)+Math.random().toString(36).slice(2,6), sales:'', bayar:'', items:[], disc:0, discType:'rp', admin:0, adminType:'rp', note:''};
   k.txns.push(t); k.active = t.id; kasirSave();
   return t;
 }
@@ -928,11 +931,14 @@ function kasirAddItem(rec){
 }
 function kasirCalc(t){
   const sub = t.items.reduce((a,i)=> a + (Number(i.price)||0) * (Number(i.qty)||0), 0);
-  // disc positif = potongan nego; disc negatif (ketik "-") = biaya admin yang ditambahkan ke total
-  let disc = Number(t.disc)||0;
-  if(t.discType === 'pct') disc = Math.round(sub * Math.min(Math.max(disc,-100),100) / 100);
+  // potongan nego dihitung dari subtotal; biaya admin dihitung dari subtotal setelah potongan
+  let disc = Math.max(Number(t.disc)||0, 0);
+  if(t.discType === 'pct') disc = Math.round(sub * Math.min(disc,100) / 100);
   disc = Math.min(disc, sub);
-  return {sub, disc, total: sub - disc};
+  const base = sub - disc;
+  let admin = Math.max(Number(t.admin)||0, 0);
+  if(t.adminType === 'pct') admin = Math.round(base * admin / 100);
+  return {sub, disc, admin, total: base + admin};
 }
 function kasirRp(n){ n = Number(n)||0; return (n<0?'-':'') + 'Rp' + Math.abs(n).toLocaleString('id-ID'); }
 function kasirSummaryText(t){
@@ -942,8 +948,8 @@ function kasirSummaryText(t){
   t.items.forEach((i,n)=>{
     lines.push((n+1)+'. '+i.ds+' ('+i.no+') x'+i.qty+' @'+kasirRp(i.price)+' = '+kasirRp(i.price*i.qty)+(i.sn ? ' | SN/Ket: '+i.sn : ''));
   });
-  if(c.disc > 0) lines.push('Potongan: '+kasirRp(c.disc)+(t.discType==='pct' ? ' ('+t.disc+'%)' : ''));
-  if(c.disc < 0) lines.push('Biaya admin: +'+kasirRp(-c.disc)+(t.discType==='pct' ? ' ('+(-t.disc)+'%)' : ''));
+  if(c.disc > 0) lines.push('Potongan: -'+kasirRp(c.disc)+(t.discType==='pct' ? ' ('+t.disc+'%)' : ''));
+  if(c.admin > 0) lines.push('Biaya admin: +'+kasirRp(c.admin)+(t.adminType==='pct' ? ' ('+t.admin+'%)' : ''));
   lines.push('TOTAL: '+kasirRp(c.total));
   if(t.note) lines.push('Catatan: '+t.note);
   return lines.join('\n');
@@ -971,11 +977,10 @@ function kasirRenderTabs(){
     };
   });
 }
-function kasirDiscText(c){ return c.disc < 0 ? '+'+kasirRp(-c.disc) : '-'+kasirRp(c.disc); }
 function kasirUpdateTotals(t){
   const c = kasirCalc(t);
   const set = (id,v)=>{ const e = document.getElementById(id); if(e) e.textContent = v; };
-  set('kSubtotal', kasirRp(c.sub)); set('kDiscAmt', kasirDiscText(c)); set('kDiscLabel', c.disc < 0 ? 'Biaya admin' : 'Potongan (nego)'); set('kTotal', kasirRp(c.total));
+  set('kSubtotal', kasirRp(c.sub)); set('kDiscAmt', '-'+kasirRp(c.disc)); set('kAdminAmt', '+'+kasirRp(c.admin)); set('kTotal', kasirRp(c.total));
   t.items.forEach(i=> set('kSub_'+i.key.replace(/[^A-Za-z0-9]/g,'_'), kasirRp((Number(i.price)||0)*(Number(i.qty)||0))));
   kasirRenderTabsLabelsOnly();
 }
@@ -1014,12 +1019,14 @@ function kasirRenderBody(){
     ${rows}
     <div class="kTotals">
       <div class="kLine"><span>Subtotal</span><span class="kSub" id="kSubtotal">${kasirRp(c.sub)}</span></div>
-      <div class="kLine"><span id="kDiscLabel">${c.disc < 0 ? 'Biaya admin' : 'Potongan (nego)'}</span>
-        <input type="text" inputmode="decimal" id="kDisc" style="width:110px;" value="${t.disc||''}" placeholder="0">
-        <button class="small ghost" type="button" id="kSign" title="Ganti tanda: potongan (+) / biaya admin (-)">&plusmn;</button>
+      <div class="kLine"><span>Potongan (nego)</span>
+        <input type="number" inputmode="numeric" min="0" id="kDisc" style="width:110px;" value="${t.disc||''}" placeholder="0">
         <select id="kDiscType"><option value="rp" ${t.discType==='rp'?'selected':''}>Rp</option><option value="pct" ${t.discType==='pct'?'selected':''}>%</option></select>
-        <span class="kSub" id="kDiscAmt">${kasirDiscText(c)}</span></div>
-      <div class="muted" style="font-size:12px;">Isi angka untuk potongan nego. Ketik tanda minus (-) di depan, atau tekan &plusmn;, untuk biaya admin yang ditambahkan ke total.</div>
+        <span class="kSub" id="kDiscAmt">-${kasirRp(c.disc)}</span></div>
+      <div class="kLine"><span>Biaya admin</span>
+        <input type="number" inputmode="numeric" min="0" id="kAdmin" style="width:110px;" value="${t.admin||''}" placeholder="0">
+        <select id="kAdminType"><option value="rp" ${t.adminType==='rp'?'selected':''}>Rp</option><option value="pct" ${t.adminType==='pct'?'selected':''}>%</option></select>
+        <span class="kSub" id="kAdminAmt">+${kasirRp(c.admin)}</span></div>
       <div class="kLine"><span><b>TOTAL</b></span><span class="kSub kBig" id="kTotal">${kasirRp(c.total)}</span></div>
     </div>
     <input type="text" id="kNote" placeholder="Catatan (nama pembeli, dll)" value="${escHtml(t.note)}" style="margin-top:10px;">
@@ -1032,14 +1039,9 @@ function kasirRenderBody(){
   sel('kSales', e=>{ t.sales = e.target.value; kasirSave(); kasirRenderTabsLabelsOnly(); });
   sel('kBayar', e=>{ t.bayar = e.target.value; kasirSave(); });
   sel('kDiscType', e=>{ t.discType = e.target.value; kasirSave(); kasirUpdateTotals(t); });
-  const discEl = document.getElementById('kDisc');
-  discEl.oninput = e=>{
-    const raw = e.target.value.replace(',', '.');
-    if(raw === '-' ) { t.disc = 0; return; } // sedang mengetik tanda minus
-    const n = Number(raw.replace(/[^0-9.\-]/g,''));
-    t.disc = isNaN(n) ? 0 : n; kasirSave(); kasirUpdateTotals(t);
-  };
-  document.getElementById('kSign').onclick = ()=>{ t.disc = -(Number(t.disc)||0); discEl.value = t.disc || ''; kasirSave(); kasirUpdateTotals(t); };
+  document.getElementById('kDisc').oninput = e=>{ t.disc = Math.max(Number(e.target.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
+  document.getElementById('kAdmin').oninput = e=>{ t.admin = Math.max(Number(e.target.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
+  sel('kAdminType', e=>{ t.adminType = e.target.value; kasirSave(); kasirUpdateTotals(t); });
   document.getElementById('kNote').oninput = e=>{ t.note = e.target.value; kasirSave(); };
   body.querySelectorAll('.kRow').forEach(row=>{
     const it = t.items.find(i=>i.key===row.dataset.key); if(!it) return;
@@ -1073,7 +1075,9 @@ function kasirRenderHits(){
   const box = document.getElementById('kSearchRes'); if(!box) return;
   const q = _kQuery.trim();
   if(!q){ box.innerHTML = ''; _kHits = []; return; }
-  _kHits = buildResults(q).slice(0, 8);
+  // Ready & Ready-Indent paling atas, lalu Indent, terakhir yang kosong
+  const rank = {'ready':0,'ready-indent':0,'indent':1,'':2};
+  _kHits = buildResults(q).map((r,i)=>({r,i,k:rank[recStatus(r)]})).sort((a,b)=>a.k-b.k||a.i-b.i).slice(0, 8).map(x=>x.r);
   if(!_kHits.length){ box.innerHTML = '<div class="muted">Tidak ditemukan.</div>'; return; }
   const stLabel = {'ready':'Ready','ready-indent':'Ready-Indent','indent':'Indent','':'Kosong'};
   box.innerHTML = _kHits.map((r,i)=>{
