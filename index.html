@@ -77,6 +77,20 @@ th{color:var(--muted);font-weight:500;}
 .fpanel .tabs{flex-wrap:wrap;overflow:visible;margin-bottom:12px;}
 .fpanel .fReset{margin:0 0 12px;}
 .fSummary{font-size:12px;color:var(--amber);margin:-2px 0 12px;}
+.kRow{border-bottom:1px solid var(--line);padding:10px 0;}
+.kRow .kName{font-size:13px;margin-bottom:6px;}
+.kRow .kName .itemNo{color:var(--muted);font-size:12px;}
+.kLine{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.kLine input[type=number],.kLine input[type=text],.kLine select{margin-bottom:0;width:auto;}
+.kLine input.kPrice{width:130px;} .kLine input.kQty{width:56px;text-align:center;} .kLine input.kSn{flex:1;min-width:120px;}
+.kSub{margin-left:auto;font-weight:600;white-space:nowrap;}
+.kPriceChanged{border-color:var(--amber) !important;}
+.kTotals{margin-top:12px;border-top:1px solid var(--line);padding-top:10px;line-height:1.9;}
+.kTotals .kBig{font-size:18px;font-weight:700;color:var(--amber);}
+select{background:#0f1319;border:1px solid var(--line);border-radius:7px;color:var(--text);padding:9px 10px;font:inherit;}
+.kBtns{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;}
+button.kDanger{background:transparent;border:1px solid var(--warn);color:var(--warn);}
+.kToast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--amber);color:#1a1406;padding:9px 16px;border-radius:20px;font-size:13px;font-weight:600;z-index:60;box-shadow:0 4px 14px rgba(0,0,0,.4);}
 .loadNote{font-size:12px;color:var(--amber);margin-bottom:10px;}
 </style>
 </head>
@@ -332,7 +346,7 @@ function clearLeasing(){
 auth.onAuthStateChanged(user=>{
   state.staffMode = !!user;
   if(user){ loadLeasing(); }
-  else { clearLeasing(); if(state.tab==='skema') state.tab = 'stok'; }
+  else { clearLeasing(); if(state.tab==='skema' || state.tab==='kasir') state.tab = 'stok'; }
   if(state.loaded) render();
 });
 
@@ -359,11 +373,11 @@ function render(){
     if(state.publicView==='promotor') bindPromotor(); else bindStok();
   } else {
     app.innerHTML = `
-      <div class="tabs">${tabBtn('stok','Cek Stok')}${tabBtn('skema','Skema Leasing')}${tabBtn('upload','Upload Excel')}</div>
+      <div class="tabs">${tabBtn('stok','Cek Stok')}${tabBtn('skema','Skema Leasing')}${tabBtn('kasir','Kasir'+kasirBadge())}${tabBtn('upload','Upload Excel')}</div>
       <div id="tabBody"></div>`;
-    document.getElementById('tabBody').innerHTML = state.tab === 'stok' ? stokView() : (state.tab === 'skema' ? skemaView() : uploadView());
+    document.getElementById('tabBody').innerHTML = state.tab === 'stok' ? stokView() : (state.tab === 'skema' ? skemaView() : (state.tab === 'kasir' ? kasirView() : uploadView()));
     document.querySelectorAll('.tabs > .tab').forEach(el=>el.onclick=()=>{ state.tab = el.dataset.tab; render(); });
-    if(state.tab==='stok') bindStok(); if(state.tab==='skema') bindSkema(); if(state.tab==='upload') bindUpload();
+    if(state.tab==='stok') bindStok(); if(state.tab==='skema') bindSkema(); if(state.tab==='kasir') bindKasir(); if(state.tab==='upload') bindUpload();
   }
   renderLoginOverlay();
 }
@@ -703,7 +717,7 @@ function buildResults(q){
   if(F.status.length) all = all.filter(r=> F.status.includes(recStatus(r)));
   return all;
 }
-function itemCardHtml(rec){
+function itemCardHtml(rec, idx){
   const plTable = rec.plRows.length ? `
     <div class="tablewrap"><table>
       <thead><tr><th>Warehouse Code</th><th>Available</th><th>Allocated</th><th>Harga</th></tr></thead>
@@ -734,10 +748,12 @@ function itemCardHtml(rec){
   const barcodeLine = rec.barcode ? `<div class="muted" style="margin:-4px 0 10px;">Barcode: ${rec.barcode}${rec.barcodeFromManual ? ' (manual)' : ''}</div>` : '';
   const body = rec.manualOnly ? `${barcodeLine}${rec.manualHarga ? `<div style="margin:2px 0 10px;font-weight:600;">Harga: Rp${Number(rec.manualHarga).toLocaleString('id-ID')} <span class="muted">(referensi manual)</span></div>` : ''}${indent}`
     : `${barcodeLine}${plTable}${ownSerialBlocks}${indent}`;
-  return `<div class="itemCard"><h3>${rec.deskripsi} <span class="itemNo">(${rec.itemNo})</span></h3>${body}</div>`;
+  const kBtn = (state.staffMode && idx !== undefined) ? `<button class="small ghost kasirAdd" data-idx="${idx}" style="float:right;margin-left:8px;">+ Kasir</button>` : '';
+  return `<div class="itemCard">${kBtn}<h3>${rec.deskripsi} <span class="itemNo">(${rec.itemNo})</span></h3>${body}</div>`;
 }
 
 const RESULT_CAP = 40;
+let _shownResults = [];
 let searchTimer = null;
 function runSearchAndRenderBody(){
   const body = document.getElementById('resultBody');
@@ -751,7 +767,8 @@ function runSearchAndRenderBody(){
   const results = buildResults(q);
   if(!results.length){ body.innerHTML = state.pending>0 && !hasData ? '<div class="muted">Memuat data...</div>' : '<div class="muted">Tidak ditemukan.</div>'; return; }
   const shown = results.slice(0, RESULT_CAP);
-  let html = shown.map(itemCardHtml).join('');
+  _shownResults = shown;
+  let html = shown.map((r,i)=>itemCardHtml(r,i)).join('');
   if(results.length > RESULT_CAP) html += `<div class="muted">Menampilkan ${RESULT_CAP} dari ${results.length} hasil.</div>`;
   body.innerHTML = html;
 }
@@ -764,6 +781,12 @@ function bindStok(){
     document.getElementById('filterPanel').classList.toggle('open', state.filterOpen);
   };
   bindFilterChips();
+  document.getElementById('resultBody').onclick = (e)=>{
+    const b = e.target.closest && e.target.closest('.kasirAdd');
+    if(!b) return;
+    const rec = _shownResults[Number(b.dataset.idx)];
+    if(rec) kasirAddItem(rec);
+  };
   runSearchAndRenderBody();
 }
 
@@ -851,6 +874,182 @@ function bindSkema(){
   });
   runSkema();
 }
+
+// ---------- Kasir (catatan transaksi, khusus mode staff) ----------
+// Hanya catatan untuk membantu input ke komputer: TIDAK mengubah stok. Disimpan di browser perangkat ini (localStorage),
+// jadi tidak membebani database dan tidak mempengaruhi kecepatan pencarian.
+const KASIR_SALES = ['Fariz','Khalifah','Hanna','Tiara','Meli','Diana'];
+const KASIR_BAYAR = ['Cash or Transfer','Qris','SpayLater Limit Extra','Kredivo','SF+','Debit','AkuLaku','Promo'];
+const KASIR_KEY = 'kasirCatatanV1';
+let _kasir = null;
+function kasirData(){
+  if(_kasir) return _kasir;
+  try{ const raw = localStorage.getItem(KASIR_KEY); _kasir = raw ? JSON.parse(raw) : null; }catch(e){ _kasir = null; }
+  if(!_kasir || !Array.isArray(_kasir.txns)) _kasir = {txns: [], active: null};
+  return _kasir;
+}
+function kasirSave(){ try{ localStorage.setItem(KASIR_KEY, JSON.stringify(_kasir)); }catch(e){} }
+function kasirBadge(){ const n = kasirData().txns.length; return n ? ` (${n})` : ''; }
+function kasirUpdateBadge(){
+  const el = document.querySelector('.tabs > .tab[data-tab="kasir"]');
+  if(el) el.textContent = 'Kasir' + kasirBadge();
+}
+function kasirNewTxn(){
+  const k = kasirData();
+  const t = {id: Date.now().toString(36)+Math.random().toString(36).slice(2,6), sales:'', bayar:'', items:[], disc:0, discType:'rp', note:''};
+  k.txns.push(t); k.active = t.id; kasirSave();
+  return t;
+}
+function kasirActive(){
+  const k = kasirData();
+  return k.txns.find(t=>t.id===k.active) || k.txns[k.txns.length-1] || null;
+}
+function kasirToast(msg){
+  const old = document.getElementById('kToast'); if(old) old.remove();
+  const el = document.createElement('div'); el.id = 'kToast'; el.className = 'kToast'; el.textContent = msg;
+  document.body.appendChild(el); setTimeout(()=>{ el.remove(); }, 1800);
+}
+function kasirAddItem(rec){
+  const k = kasirData();
+  let t = kasirActive() || kasirNewTxn();
+  k.active = t.id;
+  const key = rec.itemNo === '(data manual)' ? 'M::'+rec.deskripsi : rec.itemNo;
+  const price = Number(recPrice(rec)) || 0;
+  const ex = t.items.find(i=>i.key===key);
+  if(ex) ex.qty += 1;
+  else t.items.push({key, no: rec.itemNo, ds: rec.deskripsi, base: price, price, qty: 1, sn: ''});
+  kasirSave(); kasirUpdateBadge();
+  kasirToast('Ditambahkan ke Transaksi '+(k.txns.indexOf(t)+1)+' ('+(ex ? 'qty '+ex.qty : 'baru')+')');
+}
+function kasirCalc(t){
+  const sub = t.items.reduce((a,i)=> a + (Number(i.price)||0) * (Number(i.qty)||0), 0);
+  let disc = Number(t.disc)||0;
+  if(t.discType === 'pct') disc = Math.round(sub * Math.min(Math.max(disc,0),100) / 100);
+  disc = Math.min(Math.max(disc,0), sub);
+  return {sub, disc, total: sub - disc};
+}
+function kasirRp(n){ return 'Rp' + (Number(n)||0).toLocaleString('id-ID'); }
+function kasirSummaryText(t){
+  const c = kasirCalc(t);
+  const lines = [];
+  lines.push('Sales: '+(t.sales||'-')+' | Bayar: '+(t.bayar||'-'));
+  t.items.forEach((i,n)=>{
+    lines.push((n+1)+'. '+i.ds+' ('+i.no+') x'+i.qty+' @'+kasirRp(i.price)+' = '+kasirRp(i.price*i.qty)+(i.sn ? ' | SN/Ket: '+i.sn : ''));
+  });
+  if(c.disc) lines.push('Potongan: '+kasirRp(c.disc)+(t.discType==='pct' ? ' ('+t.disc+'%)' : ''));
+  lines.push('TOTAL: '+kasirRp(c.total));
+  if(t.note) lines.push('Catatan: '+t.note);
+  return lines.join('\n');
+}
+function kasirView(){
+  return `<div class="card">
+    <h2>Kasir</h2>
+    <div class="hint">Catatan untuk membantu input ke komputer. <b>Tidak mengurangi stok.</b> Tersimpan di perangkat ini saja. Tambah item lewat tombol <b>+ Kasir</b> di tab Cek Stok.</div>
+    <div class="tabs catRow" id="kTabs"></div>
+    <div id="kBody"></div>
+  </div>`;
+}
+function kasirRenderTabs(){
+  const k = kasirData(); const act = kasirActive();
+  const el = document.getElementById('kTabs'); if(!el) return;
+  el.innerHTML = k.txns.map((t,i)=>`<div class="tab ${act && act.id===t.id ? 'active':''}" data-kid="${t.id}">${i+1}. ${escHtml(t.sales||'Baru')} &middot; ${kasirRp(kasirCalc(t).total)}</div>`).join('')
+    + `<div class="tab" data-knew="1">+ Transaksi baru</div>`;
+  el.querySelectorAll('.tab').forEach(c=>{
+    c.onclick = ()=>{
+      if(c.dataset.knew){ kasirNewTxn(); } else { k.active = c.dataset.kid; kasirSave(); }
+      kasirRenderTabs(); kasirRenderBody(); kasirUpdateBadge();
+    };
+  });
+}
+function kasirUpdateTotals(t){
+  const c = kasirCalc(t);
+  const set = (id,v)=>{ const e = document.getElementById(id); if(e) e.textContent = v; };
+  set('kSubtotal', kasirRp(c.sub)); set('kDiscAmt', '-'+kasirRp(c.disc)); set('kTotal', kasirRp(c.total));
+  t.items.forEach(i=> set('kSub_'+i.key.replace(/[^A-Za-z0-9]/g,'_'), kasirRp((Number(i.price)||0)*(Number(i.qty)||0))));
+  kasirRenderTabsLabelsOnly();
+}
+function kasirRenderTabsLabelsOnly(){
+  const k = kasirData();
+  document.querySelectorAll('#kTabs .tab[data-kid]').forEach((el,i)=>{
+    const t = k.txns[i]; if(t) el.innerHTML = `${i+1}. ${escHtml(t.sales||'Baru')} &middot; ${kasirRp(kasirCalc(t).total)}`;
+  });
+}
+function kasirRenderBody(){
+  const body = document.getElementById('kBody'); if(!body) return;
+  const k = kasirData(); const t = kasirActive();
+  if(!t){ body.innerHTML = '<div class="muted">Belum ada transaksi. Klik <b>+ Transaksi baru</b>, atau tekan <b>+ Kasir</b> pada item di tab Cek Stok.</div>'; return; }
+  const opt = (list,val,ph)=> `<option value="">${ph}</option>` + list.map(x=>`<option ${x===val?'selected':''}>${escHtml(x)}</option>`).join('');
+  const rows = t.items.length ? t.items.map(i=>{
+    const sid = i.key.replace(/[^A-Za-z0-9]/g,'_');
+    return `<div class="kRow" data-key="${escHtml(i.key)}">
+      <div class="kName">${escHtml(i.ds)} <span class="itemNo">(${escHtml(i.no)})</span></div>
+      <div class="kLine">
+        <button class="small ghost kMinus" type="button">&minus;</button>
+        <input type="number" inputmode="numeric" min="1" class="kQty" value="${i.qty}">
+        <button class="small ghost kPlus" type="button">+</button>
+        <input type="number" inputmode="numeric" min="0" class="kPrice ${i.price!==i.base?'kPriceChanged':''}" value="${i.price}" title="Harga satuan (bisa diubah untuk nego)">
+        <span class="kSub" id="kSub_${sid}">${kasirRp(i.price*i.qty)}</span>
+        <button class="small ghost kDel" type="button" title="Hapus item">&times;</button>
+      </div>
+      <div class="kLine" style="margin-top:6px;"><input type="text" class="kSn" placeholder="SN / IMEI / keterangan (opsional)" value="${escHtml(i.sn)}"></div>
+    </div>`;
+  }).join('') : '<div class="muted" style="padding:8px 0;">Belum ada item. Tambahkan lewat tombol <b>+ Kasir</b> di tab Cek Stok.</div>';
+  const c = kasirCalc(t);
+  body.innerHTML = `
+    <div class="kLine" style="margin-bottom:10px;">
+      <select id="kSales">${opt(KASIR_SALES,t.sales,'Pilih sales')}</select>
+      <select id="kBayar">${opt(KASIR_BAYAR,t.bayar,'Metode pembayaran')}</select>
+    </div>
+    ${rows}
+    <div class="kTotals">
+      <div class="kLine"><span>Subtotal</span><span class="kSub" id="kSubtotal">${kasirRp(c.sub)}</span></div>
+      <div class="kLine"><span>Potongan (nego)</span>
+        <input type="number" inputmode="numeric" min="0" id="kDisc" style="width:110px;" value="${t.disc||''}" placeholder="0">
+        <select id="kDiscType"><option value="rp" ${t.discType==='rp'?'selected':''}>Rp</option><option value="pct" ${t.discType==='pct'?'selected':''}>%</option></select>
+        <span class="kSub" id="kDiscAmt">-${kasirRp(c.disc)}</span></div>
+      <div class="kLine"><span><b>TOTAL</b></span><span class="kSub kBig" id="kTotal">${kasirRp(c.total)}</span></div>
+    </div>
+    <input type="text" id="kNote" placeholder="Catatan (nama pembeli, dll)" value="${escHtml(t.note)}" style="margin-top:10px;">
+    <div class="kBtns">
+      <button type="button" id="kCopy" class="ghost">Salin ringkasan</button>
+      <button type="button" id="kDone">Selesai (hapus catatan)</button>
+      <button type="button" id="kCancel" class="kDanger">Batalkan transaksi</button>
+    </div>`;
+  const sel = (id,fn)=>{ const e = document.getElementById(id); if(e) e.onchange = fn; };
+  sel('kSales', e=>{ t.sales = e.target.value; kasirSave(); kasirRenderTabsLabelsOnly(); });
+  sel('kBayar', e=>{ t.bayar = e.target.value; kasirSave(); });
+  sel('kDiscType', e=>{ t.discType = e.target.value; kasirSave(); kasirUpdateTotals(t); });
+  document.getElementById('kDisc').oninput = e=>{ t.disc = Number(e.target.value)||0; kasirSave(); kasirUpdateTotals(t); };
+  document.getElementById('kNote').oninput = e=>{ t.note = e.target.value; kasirSave(); };
+  body.querySelectorAll('.kRow').forEach(row=>{
+    const it = t.items.find(i=>i.key===row.dataset.key); if(!it) return;
+    const qtyEl = row.querySelector('.kQty'), priceEl = row.querySelector('.kPrice');
+    const setQty = n=>{ it.qty = Math.max(1, Math.floor(n)||1); qtyEl.value = it.qty; kasirSave(); kasirUpdateTotals(t); };
+    row.querySelector('.kMinus').onclick = ()=> setQty(it.qty-1);
+    row.querySelector('.kPlus').onclick = ()=> setQty(it.qty+1);
+    qtyEl.onchange = ()=> setQty(Number(qtyEl.value));
+    priceEl.oninput = ()=>{ it.price = Math.max(0, Number(priceEl.value)||0); priceEl.classList.toggle('kPriceChanged', it.price!==it.base); kasirSave(); kasirUpdateTotals(t); };
+    row.querySelector('.kSn').oninput = e=>{ it.sn = e.target.value; kasirSave(); };
+    row.querySelector('.kDel').onclick = ()=>{ t.items = t.items.filter(x=>x!==it); kasirSave(); kasirRenderBody(); kasirRenderTabsLabelsOnly(); };
+  });
+  document.getElementById('kCopy').onclick = ()=>{
+    const txt = kasirSummaryText(t);
+    const ok = ()=> kasirToast('Ringkasan disalin');
+    if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(ok, ()=>{ window.prompt('Salin teks ini:', txt); });
+    else window.prompt('Salin teks ini:', txt);
+  };
+  const removeTxn = ()=>{
+    k.txns = k.txns.filter(x=>x!==t); k.active = k.txns.length ? k.txns[k.txns.length-1].id : null; kasirSave();
+    kasirRenderTabs(); kasirRenderBody(); kasirUpdateBadge();
+  };
+  document.getElementById('kDone').onclick = ()=>{
+    if(!t.items.length || confirm('Tandai selesai? Catatan transaksi ini akan langsung dihapus.')) removeTxn();
+  };
+  document.getElementById('kCancel').onclick = ()=>{
+    if(!t.items.length || confirm('Batalkan transaksi ini? Catatan akan dihapus.')) removeTxn();
+  };
+}
+function bindKasir(){ kasirRenderTabs(); kasirRenderBody(); }
 
 function uploadView(){
   return `<div class="card">
