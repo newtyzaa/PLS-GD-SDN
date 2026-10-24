@@ -891,6 +891,7 @@ function kasirData(){
   try{ const raw = localStorage.getItem(KASIR_KEY); _kasir = raw ? JSON.parse(raw) : null; }catch(e){ _kasir = null; }
   if(!_kasir || !Array.isArray(_kasir.txns)) _kasir = {txns: [], active: null};
   _kasir.txns.forEach(t=>{ // data lama: potongan negatif = biaya admin
+    t.items.forEach(i=>{ if(i.disc === undefined){ i.disc = 0; i.discType = 'rp'; } });
     if(t.admin === undefined){ t.admin = 0; t.adminType = t.discType || 'rp'; if((Number(t.disc)||0) < 0){ t.admin = -t.disc; t.disc = 0; } }
   });
   return _kasir;
@@ -924,21 +925,31 @@ function kasirAddItem(rec){
   const price = Number(recPrice(rec)) || 0;
   const ex = t.items.find(i=>i.key===key);
   if(ex) ex.qty += 1;
-  else t.items.push({key, no: rec.itemNo, ds: rec.deskripsi, base: price, price, qty: 1, sn: ''});
+  else t.items.push({key, no: rec.itemNo, ds: rec.deskripsi, base: price, price, qty: 1, disc: 0, discType: 'rp', sn: ''});
   kasirSave(); kasirUpdateBadge();
   if(document.getElementById('kBody')){ kasirRenderTabs(); kasirRenderBody(); }
   kasirToast('Ditambahkan ke Transaksi '+(k.txns.indexOf(t)+1)+' ('+(ex ? 'qty '+ex.qty : 'baru')+')');
 }
+// Potongan nego diisi per item dan berlaku untuk total baris item itu (harga x jumlah).
+function kasirLine(i){
+  const gross = (Number(i.price)||0) * (Number(i.qty)||0);
+  let d = Math.max(Number(i.disc)||0, 0);
+  if(i.discType === 'pct') d = Math.round(gross * Math.min(d,100) / 100);
+  d = Math.min(d, gross);
+  return {gross, d, net: gross - d};
+}
 function kasirCalc(t){
-  const sub = t.items.reduce((a,i)=> a + (Number(i.price)||0) * (Number(i.qty)||0), 0);
-  // potongan nego dihitung dari subtotal; biaya admin dihitung dari subtotal setelah potongan
+  let gross = 0, itemDisc = 0;
+  t.items.forEach(i=>{ const l = kasirLine(i); gross += l.gross; itemDisc += l.d; });
+  const sub = gross - itemDisc;
+  // potongan transaksi (hanya dari catatan lama), lalu biaya admin dihitung dari subtotal setelah semua potongan
   let disc = Math.max(Number(t.disc)||0, 0);
   if(t.discType === 'pct') disc = Math.round(sub * Math.min(disc,100) / 100);
   disc = Math.min(disc, sub);
   const base = sub - disc;
   let admin = Math.max(Number(t.admin)||0, 0);
   if(t.adminType === 'pct') admin = Math.round(base * admin / 100);
-  return {sub, disc, admin, total: base + admin};
+  return {gross, itemDisc, sub, disc, admin, total: base + admin};
 }
 function kasirRp(n){ n = Number(n)||0; return (n<0?'-':'') + 'Rp' + Math.abs(n).toLocaleString('id-ID'); }
 function kasirSummaryText(t){
@@ -946,9 +957,10 @@ function kasirSummaryText(t){
   const lines = [];
   lines.push('Sales: '+(t.sales||'-')+' | Bayar: '+(t.bayar||'-'));
   t.items.forEach((i,n)=>{
-    lines.push((n+1)+'. '+i.ds+' ('+i.no+') x'+i.qty+' @'+kasirRp(i.price)+' = '+kasirRp(i.price*i.qty)+(i.sn ? ' | SN/Ket: '+i.sn : ''));
+    const l = kasirLine(i);
+    lines.push((n+1)+'. '+i.ds+' ('+i.no+') x'+i.qty+' @'+kasirRp(i.price)+(l.d ? ' | nego -'+kasirRp(l.d)+(i.discType==='pct' ? ' ('+i.disc+'%)' : '') : '')+' = '+kasirRp(l.net)+(i.sn ? ' | SN/Ket: '+i.sn : ''));
   });
-  if(c.disc > 0) lines.push('Potongan: -'+kasirRp(c.disc)+(t.discType==='pct' ? ' ('+t.disc+'%)' : ''));
+  if(c.disc > 0) lines.push('Potongan transaksi: -'+kasirRp(c.disc)+(t.discType==='pct' ? ' ('+t.disc+'%)' : ''));
   if(c.admin > 0) lines.push('Biaya admin: +'+kasirRp(c.admin)+(t.adminType==='pct' ? ' ('+t.admin+'%)' : ''));
   lines.push('TOTAL: '+kasirRp(c.total));
   if(t.note) lines.push('Catatan: '+t.note);
@@ -980,8 +992,8 @@ function kasirRenderTabs(){
 function kasirUpdateTotals(t){
   const c = kasirCalc(t);
   const set = (id,v)=>{ const e = document.getElementById(id); if(e) e.textContent = v; };
-  set('kSubtotal', kasirRp(c.sub)); set('kDiscAmt', '-'+kasirRp(c.disc)); set('kAdminAmt', '+'+kasirRp(c.admin)); set('kTotal', kasirRp(c.total));
-  t.items.forEach(i=> set('kSub_'+i.key.replace(/[^A-Za-z0-9]/g,'_'), kasirRp((Number(i.price)||0)*(Number(i.qty)||0))));
+  set('kSubtotal', kasirRp(c.gross)); set('kItemDisc', '-'+kasirRp(c.itemDisc)); set('kDiscAmt', '-'+kasirRp(c.disc)); set('kAdminAmt', '+'+kasirRp(c.admin)); set('kTotal', kasirRp(c.total));
+  t.items.forEach(i=>{ const l = kasirLine(i), sid = i.key.replace(/[^A-Za-z0-9]/g,'_'); set('kSub_'+sid, kasirRp(l.net)); set('kND_'+sid, l.d ? 'nego -'+kasirRp(l.d) : ''); });
   kasirRenderTabsLabelsOnly();
 }
 function kasirRenderTabsLabelsOnly(){
@@ -1004,8 +1016,14 @@ function kasirRenderBody(){
         <input type="number" inputmode="numeric" min="1" class="kQty" value="${i.qty}">
         <button class="small ghost kPlus" type="button">+</button>
         <input type="number" inputmode="numeric" min="0" class="kPrice ${i.price!==i.base?'kPriceChanged':''}" value="${i.price}" title="Harga satuan (bisa diubah untuk nego)">
-        <span class="kSub" id="kSub_${sid}">${kasirRp(i.price*i.qty)}</span>
+        <span class="kSub" id="kSub_${sid}">${kasirRp(kasirLine(i).net)}</span>
         <button class="small ghost kDel" type="button" title="Hapus item">&times;</button>
+      </div>
+      <div class="kLine" style="margin-top:6px;">
+        <span class="muted">Nego</span>
+        <input type="number" inputmode="numeric" min="0" class="kItemDisc" style="width:100px;" value="${i.disc||''}" placeholder="0" title="Potongan nego untuk item ini (dari total baris)">
+        <select class="kItemDiscType"><option value="rp" ${i.discType==='rp'?'selected':''}>Rp</option><option value="pct" ${i.discType==='pct'?'selected':''}>%</option></select>
+        <span class="muted" id="kND_${sid}">${kasirLine(i).d ? 'nego -'+kasirRp(kasirLine(i).d) : ''}</span>
       </div>
       <div class="kLine" style="margin-top:6px;"><input type="text" class="kSn" placeholder="SN / IMEI / keterangan (opsional)" value="${escHtml(i.sn)}"></div>
     </div>`;
@@ -1019,10 +1037,11 @@ function kasirRenderBody(){
     ${rows}
     <div class="kTotals">
       <div class="kLine"><span>Subtotal</span><span class="kSub" id="kSubtotal">${kasirRp(c.sub)}</span></div>
-      <div class="kLine"><span>Potongan (nego)</span>
+      <div class="kLine"><span>Potongan nego (per item)</span><span class="kSub" id="kItemDisc">-${kasirRp(c.itemDisc)}</span></div>
+      ${t.disc>0 ? `<div class="kLine"><span>Potongan transaksi (catatan lama)</span>
         <input type="number" inputmode="numeric" min="0" id="kDisc" style="width:110px;" value="${t.disc||''}" placeholder="0">
         <select id="kDiscType"><option value="rp" ${t.discType==='rp'?'selected':''}>Rp</option><option value="pct" ${t.discType==='pct'?'selected':''}>%</option></select>
-        <span class="kSub" id="kDiscAmt">-${kasirRp(c.disc)}</span></div>
+        <span class="kSub" id="kDiscAmt">-${kasirRp(c.disc)}</span></div>` : ''}
       <div class="kLine"><span>Biaya admin</span>
         <input type="number" inputmode="numeric" min="0" id="kAdmin" style="width:110px;" value="${t.admin||''}" placeholder="0">
         <select id="kAdminType"><option value="rp" ${t.adminType==='rp'?'selected':''}>Rp</option><option value="pct" ${t.adminType==='pct'?'selected':''}>%</option></select>
@@ -1039,7 +1058,7 @@ function kasirRenderBody(){
   sel('kSales', e=>{ t.sales = e.target.value; kasirSave(); kasirRenderTabsLabelsOnly(); });
   sel('kBayar', e=>{ t.bayar = e.target.value; kasirSave(); });
   sel('kDiscType', e=>{ t.discType = e.target.value; kasirSave(); kasirUpdateTotals(t); });
-  document.getElementById('kDisc').oninput = e=>{ t.disc = Math.max(Number(e.target.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
+  const kd = document.getElementById('kDisc'); if(kd) kd.oninput = e=>{ t.disc = Math.max(Number(e.target.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
   document.getElementById('kAdmin').oninput = e=>{ t.admin = Math.max(Number(e.target.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
   sel('kAdminType', e=>{ t.adminType = e.target.value; kasirSave(); kasirUpdateTotals(t); });
   document.getElementById('kNote').oninput = e=>{ t.note = e.target.value; kasirSave(); };
@@ -1051,6 +1070,9 @@ function kasirRenderBody(){
     row.querySelector('.kPlus').onclick = ()=> setQty(it.qty+1);
     qtyEl.onchange = ()=> setQty(Number(qtyEl.value));
     priceEl.oninput = ()=>{ it.price = Math.max(0, Number(priceEl.value)||0); priceEl.classList.toggle('kPriceChanged', it.price!==it.base); kasirSave(); kasirUpdateTotals(t); };
+    const idEl = row.querySelector('.kItemDisc'), idType = row.querySelector('.kItemDiscType');
+    idEl.oninput = ()=>{ it.disc = Math.max(Number(idEl.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
+    idType.onchange = ()=>{ it.discType = idType.value; kasirSave(); kasirUpdateTotals(t); };
     row.querySelector('.kSn').oninput = e=>{ it.sn = e.target.value; kasirSave(); };
     row.querySelector('.kDel').onclick = ()=>{ t.items = t.items.filter(x=>x!==it); kasirSave(); kasirRenderBody(); kasirRenderTabsLabelsOnly(); };
   });
