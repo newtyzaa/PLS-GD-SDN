@@ -925,12 +925,17 @@ function kasirAddItem(rec){
   const price = Number(recPrice(rec)) || 0;
   const ex = t.items.find(i=>i.key===key);
   if(ex) ex.qty += 1;
-  else t.items.push({key, no: rec.itemNo, ds: rec.deskripsi, base: price, price, qty: 1, disc: 0, discType: 'rp', sn: ''});
+  else t.items.push({key, no: rec.itemNo, ds: rec.deskripsi, base: price, price, qty: 1, disc: 0, discType: 'rp', sn: '', bc: rec.barcode || ''});
   kasirSave(); kasirUpdateBadge();
   if(document.getElementById('kBody')){ kasirRenderTabs(); kasirRenderBody(); }
   kasirToast('Ditambahkan ke Transaksi '+(k.txns.indexOf(t)+1)+' ('+(ex ? 'qty '+ex.qty : 'baru')+')');
 }
 // Potongan nego diisi per item dan berlaku untuk total baris item itu (harga x jumlah).
+function kasirBarcode(i){
+  if(i.bc) return i.bc;
+  const r = (state.barcodeIndex && state.barcodeIndex[i.no]) || [];
+  return r[0] ? r[0].barcode : '';
+}
 function kasirLine(i){
   const gross = (Number(i.price)||0) * (Number(i.qty)||0);
   let d = Math.max(Number(i.disc)||0, 0);
@@ -958,7 +963,7 @@ function kasirSummaryText(t){
   lines.push('Sales: '+(t.sales||'-')+' | Bayar: '+(t.bayar||'-'));
   t.items.forEach((i,n)=>{
     const l = kasirLine(i);
-    lines.push((n+1)+'. '+i.ds+' ('+i.no+') x'+i.qty+' @'+kasirRp(i.price)+(l.d ? ' | nego -'+kasirRp(l.d)+(i.discType==='pct' ? ' ('+i.disc+'%)' : '') : '')+' = '+kasirRp(l.net)+(i.sn ? ' | SN/Ket: '+i.sn : ''));
+    lines.push((n+1)+'. '+i.ds+' ('+i.no+')'+(kasirBarcode(i) ? ' [BC: '+kasirBarcode(i)+']' : '')+' x'+i.qty+' @'+kasirRp(i.price)+(l.d ? ' | nego -'+kasirRp(l.d)+(i.discType==='pct' ? ' ('+i.disc+'%)' : '') : '')+' = '+kasirRp(l.net)+(i.sn ? ' | SN/Ket: '+i.sn : ''));
   });
   if(c.disc > 0) lines.push('Potongan transaksi: -'+kasirRp(c.disc)+(t.discType==='pct' ? ' ('+t.disc+'%)' : ''));
   if(c.admin > 0) lines.push('Biaya admin: +'+kasirRp(c.admin)+(t.adminType==='pct' ? ' ('+t.admin+'%)' : ''));
@@ -1010,7 +1015,7 @@ function kasirRenderBody(){
   const rows = t.items.length ? t.items.map(i=>{
     const sid = i.key.replace(/[^A-Za-z0-9]/g,'_');
     return `<div class="kRow" data-key="${escHtml(i.key)}">
-      <div class="kName">${escHtml(i.ds)} <span class="itemNo">(${escHtml(i.no)})</span></div>
+      <div class="kName">${escHtml(i.ds)} <span class="itemNo">(${escHtml(i.no)})</span>${kasirBarcode(i) ? `<div class="muted" style="font-size:12px;">Barcode: ${escHtml(kasirBarcode(i))}</div>` : ''}</div>
       <div class="kLine">
         <button class="small ghost kMinus" type="button">&minus;</button>
         <input type="number" inputmode="numeric" min="1" class="kQty" value="${i.qty}">
@@ -1106,7 +1111,7 @@ function kasirRenderHits(){
     const stok = r.plRows.reduce((a,x)=>a+(Number(x.available)||0),0);
     const price = recPrice(r);
     return `<div class="kHit"><div class="kHitName">${escHtml(r.deskripsi)} <span class="itemNo">(${escHtml(r.itemNo)})</span>
-      <div class="kHitMeta">${price ? kasirRp(price) : 'Harga belum ada'} &middot; ${stLabel[recStatus(r)]}${stok ? ' &middot; stok '+stok : ''}</div></div>
+      <div class="kHitMeta">${price ? kasirRp(price) : 'Harga belum ada'} &middot; ${stLabel[recStatus(r)]}${stok ? ' &middot; stok '+stok : ''}${r.barcode ? ' &middot; BC '+escHtml(r.barcode) : ''}</div></div>
       <button class="small kHitAdd" data-i="${i}" type="button">+ Tambah</button></div>`;
   }).join('');
 }
@@ -1116,7 +1121,11 @@ function bindKasir(){
   inp.oninput = ()=>{ _kQuery = inp.value; clearTimeout(_kTimer); _kTimer = setTimeout(kasirRenderHits, 200); };
   document.getElementById('kSearchRes').onclick = (e)=>{
     const b = e.target.closest && e.target.closest('.kHitAdd'); if(!b) return;
-    const rec = _kHits[Number(b.dataset.i)]; if(rec) kasirAddItem(rec);
+    const rec = _kHits[Number(b.dataset.i)];
+    if(rec){
+      kasirAddItem(rec);
+      _kQuery = ''; inp.value = ''; kasirRenderHits(); inp.focus(); // kosongkan pencarian setelah item ditambahkan
+    }
   };
 }
 
