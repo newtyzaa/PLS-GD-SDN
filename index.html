@@ -1177,12 +1177,11 @@ const _xlsxWorkerCode = `
   }
   function transform(kind, rows){
     if(kind === 'priceList'){
-      // File Reborn_PriceList: ambil harga dari kolom Retail (cadangan: Retail-AMT). Item tanpa harga dibuang.
+      // File Reborn_PriceList: harga diambil dari kolom Retail-AMT. Item tanpa harga dibuang.
       const out = [];
       rows.forEach(r=>{
         const itemNo = String(pick(r,['Item No.','Item No'])||'').trim();
-        let harga = toNumber(pick(r,['Retail']));
-        if(!harga) harga = toNumber(pick(r,['Retail-AMT']));
+        const harga = toNumber(pick(r,['Retail-AMT']));
         if(itemNo && harga > 0) out.push({itemNo, harga});
       });
       return out;
