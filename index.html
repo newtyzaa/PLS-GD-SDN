@@ -970,7 +970,6 @@ function kasirApplyTM(t){
   if(!hps.length){ info.warns.push('Ada item promo TM, tapi belum ada HP (GAD) di keranjang: belum dipotong.'); return info; }
   // syarat dikunci otomatis
   const bad = [];
-  if(TM_OK_BAYAR.indexOf(t.bayar) < 0) bad.push(t.bayar ? 'metode bayar harus Cash/Debit (sekarang: '+t.bayar+')' : 'pilih metode bayar Cash/Debit');
   const hpUnits = [];
   hps.forEach(h=>{
     const nego = (Number(h.disc)||0) > 0 || (Number(h.price)||0) !== (Number(h.base)||0);
@@ -1014,7 +1013,7 @@ function kasirTMHtml(t){
   info.lines.forEach(l=>{ h += `<div class="kTMOk">&#10003; ${escHtml(l)}</div>`; });
   info.warns.forEach(w=>{ h += `<div class="kTMWarn">&#9888; ${escHtml(w)}</div>`; });
   Array.from(new Set(info.notes)).forEach(n=>{ h += `<div class="kTMNote">Catatan promo: ${escHtml(n)}. Cek tipe HP manual.</div>`; });
-  if(info.applied) h += `<div class="kTMNote">Syarat promo: bayar Cash/Debit, harga HP SRP (tanpa nego). Jika syarat tidak terpenuhi, potongan otomatis hilang.</div>`;
+  if(info.applied) h += `<div class="kTMNote">Syarat promo: harga HP SRP (tanpa nego). Jika syarat tidak terpenuhi, potongan otomatis hilang.</div>`;
   return h;
 }
 function kasirCalc(t){
