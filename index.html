@@ -82,6 +82,7 @@ th{color:var(--muted);font-weight:500;}
 .kRow .kName .itemNo{color:var(--muted);font-size:12px;}
 .kLine{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .kLine input[type=number],.kLine input[type=text],.kLine select{margin-bottom:0;width:auto;}
+.kTM{margin:8px 0;padding:8px 10px;border:1px dashed var(--line,#444);border-radius:8px;font-size:13px;} .kTMHead{display:flex;gap:6px;align-items:center;} .kTMOk{color:var(--ok);margin-top:4px;} .kTMWarn{color:#e0a53a;margin-top:4px;} .kTMNote{color:var(--muted);margin-top:4px;font-size:12px;}
 .kLine input.kPrice{width:130px;} .kLine input.kQty{width:56px;text-align:center;} .kLine input.kSn{flex:1;min-width:120px;}
 .kSub{margin-left:auto;font-weight:600;white-space:nowrap;}
 .kPriceChanged{border-color:var(--amber) !important;}
@@ -141,7 +142,7 @@ let state = {
   filters: {brand:[], jenis:[], tipe:[], harga:[], status:[], xs:[]}, filterOpen: false, pending: 0, loadFail: false,
   query: '', loaded: false, dataVer: 0,
   publicView: 'stok', promotorBrand: null,
-  leasingHeader: null, leasingRows: [], leasingUpdated: '', leasingErr: '', skemaQuery: '', skemaProvider: null
+  promoTM: [], promoTMUpdated: '', leasingHeader: null, leasingRows: [], leasingUpdated: '', leasingErr: '', skemaQuery: '', skemaProvider: null
 };
 
 // ---------------- Firestore helpers ----------------
@@ -342,6 +343,12 @@ async function loadLeasing(){
   }catch(e){ state.leasingErr = 'Gagal memuat skema leasing (cek aturan Firestore & koneksi).'; }
   if(state.staffMode && state.loaded) render();
 }
+function applyPromoTM(rows, updatedAt){ state.promoTM = rows; state.promoTMUpdated = fmtDate(updatedAt); }
+async function loadPromoTM(){
+  try{ const r = await loadFromFirestore('promoTM', 'promoTM'); applyPromoTM(r.rows, r.updatedAt); }catch(e){}
+  if(state.staffMode && state.loaded && state.tab==='kasir') kasirRenderBody();
+}
+function clearPromoTM(){ state.promoTM = []; state.promoTMUpdated = ''; idbDel('promoTM'); }
 function clearLeasing(){
   state.leasingHeader = null; state.leasingRows = []; state.leasingUpdated = ''; state.leasingErr = '';
   state.skemaQuery = ''; state.skemaProvider = null;
@@ -349,8 +356,8 @@ function clearLeasing(){
 }
 auth.onAuthStateChanged(user=>{
   state.staffMode = !!user;
-  if(user){ loadLeasing(); }
-  else { clearLeasing(); if(state.tab==='skema' || state.tab==='kasir') state.tab = 'stok'; }
+  if(user){ loadLeasing(); loadPromoTM(); }
+  else { clearLeasing(); clearPromoTM(); if(state.tab==='skema' || state.tab==='kasir') state.tab = 'stok'; }
   if(state.loaded) render();
 });
 
@@ -940,10 +947,78 @@ function kasirLine(i){
   const gross = (Number(i.price)||0) * (Number(i.qty)||0);
   let d = Math.max(Number(i.disc)||0, 0);
   if(i.discType === 'pct') d = Math.round(gross * Math.min(d,100) / 100);
-  d = Math.min(d, gross);
-  return {gross, d, net: gross - d};
+  const tm = Math.min(Number(i.tmAmt)||0, Math.max(gross - d, 0));
+  d = Math.min(d + tm, gross);
+  return {gross, d, tm, net: gross - d};
+}
+// ---- Potongan Tebus Murah (TM) otomatis ----
+const TM_OK_BAYAR = ['Cash or Transfer','Debit'];
+const _tmInfo = {};
+function kasirTMOn(){ return kasirData().tmAuto !== false; }
+function kasirApplyTM(t){
+  t.items.forEach(i=>{ i.tmAmt = 0; });
+  const info = {lines: [], warns: [], notes: [], applied: false};
+  _tmInfo[t.id] = info;
+  if(!kasirTMOn()) return info;
+  const pk = state.promoTM || [];
+  if(!pk.length) return info;
+  const codeSet = new Set();
+  pk.forEach(p=>p.items.forEach(s=>s.codes.forEach(c=>codeSet.add(c.c))));
+  const tmItems = t.items.filter(i=>codeSet.has(i.no));
+  const hps = t.items.filter(i=>/^GAD\./.test(i.no));
+  if(!tmItems.length) return info;
+  if(!hps.length){ info.warns.push('Ada item promo TM, tapi belum ada HP (GAD) di keranjang: belum dipotong.'); return info; }
+  // syarat dikunci otomatis
+  const bad = [];
+  if(TM_OK_BAYAR.indexOf(t.bayar) < 0) bad.push(t.bayar ? 'metode bayar harus Cash/Debit (sekarang: '+t.bayar+')' : 'pilih metode bayar Cash/Debit');
+  const hpUnits = [];
+  hps.forEach(h=>{
+    const nego = (Number(h.disc)||0) > 0 || (Number(h.price)||0) !== (Number(h.base)||0);
+    if(nego) bad.push('HP '+h.ds+' tidak boleh dinego / harus SRP');
+    for(let n=0;n<(Number(h.qty)||1);n++) hpUnits.push(h);
+  });
+  if(bad.length){ info.warns.push('Potongan TM TIDAK diterapkan: '+bad.join('; ')+'.'); return info; }
+  const pool = {}; tmItems.forEach(i=>{ pool[i.no] = (pool[i.no]||0) + (Number(i.qty)||0); });
+  hpUnits.sort((a,b)=>(b.base||0)-(a.base||0));
+  hpUnits.forEach(h=>{
+    const cands = pk.filter(p=>h.base >= p.lo && h.base < p.hi);
+    let best = null;
+    cands.forEach(p=>{
+      const tmp = Object.assign({}, pool), pick = [];
+      for(const s of p.items){
+        const c = s.codes.find(c=>(tmp[c.c]||0) > 0);
+        if(!c){ return; }
+        tmp[c.c]--; pick.push(c);
+      }
+      const tot = p.hpVoucher + pick.reduce((a,c)=>a+c.pot,0);
+      if(!best || pick.length > best.pick.length || (pick.length === best.pick.length && tot > best.tot)) best = {p, pick, tot};
+    });
+    if(!best) return;
+    best.pick.forEach(c=>{ pool[c.c]--; const it = tmItems.find(i=>i.no===c.c); it.tmAmt = (it.tmAmt||0) + c.pot; });
+    h.tmAmt = (h.tmAmt||0) + best.p.hpVoucher;
+    info.applied = true;
+    info.lines.push(best.p.label.trim()+' ('+(best.p.lo/1e6)+'jt+): HP -'+kasirRp(best.p.hpVoucher)+', '+best.pick.map(c=>c.ds+' -'+kasirRp(c.pot)).join(' + ')+' | harga paket '+kasirRp(best.p.hargaPaket));
+    if(best.p.note) info.notes.push(best.p.note);
+  });
+  const left = Object.keys(pool).filter(k=>pool[k] > 0);
+  if(left.length){
+    const names = left.map(k=>{ const it = tmItems.find(i=>i.no===k); return it ? it.ds : k; });
+    info.warns.push('Tidak ada paket TM yang cocok untuk: '+names.join(', ')+' (sesuai rentang harga HP / pasangan item). Tidak dipotong.');
+  }
+  return info;
+}
+function kasirTMHtml(t){
+  const info = _tmInfo[t.id] || kasirApplyTM(t);
+  const has = (state.promoTM||[]).length;
+  let h = `<label class="kTMHead"><input type="checkbox" id="kTMOn" ${kasirTMOn()?'checked':''}> <b>Potongan TM otomatis</b>${has ? '' : ' <span class="muted">(file promo TM belum diupload)</span>'}</label>`;
+  info.lines.forEach(l=>{ h += `<div class="kTMOk">&#10003; ${escHtml(l)}</div>`; });
+  info.warns.forEach(w=>{ h += `<div class="kTMWarn">&#9888; ${escHtml(w)}</div>`; });
+  Array.from(new Set(info.notes)).forEach(n=>{ h += `<div class="kTMNote">Catatan promo: ${escHtml(n)}. Cek tipe HP manual.</div>`; });
+  if(info.applied) h += `<div class="kTMNote">Syarat promo: bayar Cash/Debit, harga HP SRP (tanpa nego). Jika syarat tidak terpenuhi, potongan otomatis hilang.</div>`;
+  return h;
 }
 function kasirCalc(t){
+  kasirApplyTM(t);
   let gross = 0, itemDisc = 0;
   t.items.forEach(i=>{ const l = kasirLine(i); gross += l.gross; itemDisc += l.d; });
   const sub = gross - itemDisc;
@@ -963,7 +1038,7 @@ function kasirSummaryText(t){
   lines.push('Sales: '+(t.sales||'-')+' | Bayar: '+(t.bayar||'-'));
   t.items.forEach((i,n)=>{
     const l = kasirLine(i);
-    lines.push((n+1)+'. '+i.ds+' ('+i.no+')'+(kasirBarcode(i) ? ' [BC: '+kasirBarcode(i)+']' : '')+' x'+i.qty+' @'+kasirRp(i.price)+(l.d ? ' | nego -'+kasirRp(l.d)+(i.discType==='pct' ? ' ('+i.disc+'%)' : '') : '')+' = '+kasirRp(l.net)+(i.sn ? ' | SN/Ket: '+i.sn : ''));
+    lines.push((n+1)+'. '+i.ds+' ('+i.no+')'+(kasirBarcode(i) ? ' [BC: '+kasirBarcode(i)+']' : '')+' x'+i.qty+' @'+kasirRp(i.price)+((l.d-l.tm) ? ' | nego -'+kasirRp(l.d-l.tm)+(i.discType==='pct' ? ' ('+i.disc+'%)' : '') : '')+(l.tm ? ' | potongan TM -'+kasirRp(l.tm) : '')+' = '+kasirRp(l.net)+(i.sn ? ' | SN/Ket: '+i.sn : ''));
   });
   if(c.disc > 0) lines.push('Potongan transaksi: -'+kasirRp(c.disc)+(t.discType==='pct' ? ' ('+t.disc+'%)' : ''));
   if(c.admin > 0) lines.push('Biaya admin: +'+kasirRp(c.admin)+(t.adminType==='pct' ? ' ('+t.admin+'%)' : ''));
@@ -998,8 +1073,13 @@ function kasirUpdateTotals(t){
   const c = kasirCalc(t);
   const set = (id,v)=>{ const e = document.getElementById(id); if(e) e.textContent = v; };
   set('kSubtotal', kasirRp(c.gross)); set('kItemDisc', '-'+kasirRp(c.itemDisc)); set('kDiscAmt', '-'+kasirRp(c.disc)); set('kAdminAmt', '+'+kasirRp(c.admin)); set('kTotal', kasirRp(c.total));
-  t.items.forEach(i=>{ const l = kasirLine(i), sid = i.key.replace(/[^A-Za-z0-9]/g,'_'); set('kSub_'+sid, kasirRp(l.net)); set('kND_'+sid, l.d ? 'nego -'+kasirRp(l.d) : ''); });
+  t.items.forEach(i=>{ const l = kasirLine(i), sid = i.key.replace(/[^A-Za-z0-9]/g,'_'); set('kSub_'+sid, kasirRp(l.net)); set('kND_'+sid, (l.d-l.tm ? 'nego -'+kasirRp(l.d-l.tm) : '') + (l.tm ? ' TM -'+kasirRp(l.tm) : '')); });
+  const tmEl = document.getElementById('kTM'); if(tmEl){ tmEl.innerHTML = kasirTMHtml(t); kasirBindTM(t); }
   kasirRenderTabsLabelsOnly();
+}
+function kasirBindTM(t){
+  const cb = document.getElementById('kTMOn');
+  if(cb) cb.onchange = ()=>{ kasirData().tmAuto = cb.checked; kasirSave(); kasirRenderBody(); kasirRenderTabsLabelsOnly(); };
 }
 function kasirRenderTabsLabelsOnly(){
   const k = kasirData();
@@ -1010,6 +1090,7 @@ function kasirRenderTabsLabelsOnly(){
 function kasirRenderBody(){
   const body = document.getElementById('kBody'); if(!body) return;
   const k = kasirData(); const t = kasirActive();
+  if(t) kasirApplyTM(t);
   if(!t){ body.innerHTML = '<div class="muted">Belum ada transaksi. Klik <b>+ Transaksi baru</b>, atau tekan <b>+ Kasir</b> pada item di tab Cek Stok.</div>'; return; }
   const opt = (list,val,ph)=> `<option value="">${ph}</option>` + list.map(x=>`<option ${x===val?'selected':''}>${escHtml(x)}</option>`).join('');
   const rows = t.items.length ? t.items.map(i=>{
@@ -1028,7 +1109,7 @@ function kasirRenderBody(){
         <span class="muted">Nego</span>
         <input type="number" inputmode="numeric" min="0" class="kItemDisc" style="width:100px;" value="${i.disc||''}" placeholder="0" title="Potongan nego untuk item ini (dari total baris)">
         <select class="kItemDiscType"><option value="rp" ${i.discType==='rp'?'selected':''}>Rp</option><option value="pct" ${i.discType==='pct'?'selected':''}>%</option></select>
-        <span class="muted" id="kND_${sid}">${kasirLine(i).d ? 'nego -'+kasirRp(kasirLine(i).d) : ''}</span>
+        <span class="muted" id="kND_${sid}">${(kasirLine(i).d-kasirLine(i).tm) ? 'nego -'+kasirRp(kasirLine(i).d-kasirLine(i).tm) : ''}${kasirLine(i).tm ? ' TM -'+kasirRp(kasirLine(i).tm) : ''}</span>
       </div>
       <div class="kLine" style="margin-top:6px;"><input type="text" class="kSn" placeholder="SN / IMEI / keterangan (opsional)" value="${escHtml(i.sn)}"></div>
     </div>`;
@@ -1039,6 +1120,7 @@ function kasirRenderBody(){
       <select id="kSales">${opt(KASIR_SALES,t.sales,'Pilih sales')}</select>
       <select id="kBayar">${opt(KASIR_BAYAR,t.bayar,'Metode pembayaran')}</select>
     </div>
+    <div id="kTM" class="kTM">${kasirTMHtml(t)}</div>
     ${rows}
     <div class="kTotals">
       <div class="kLine"><span>Subtotal</span><span class="kSub" id="kSubtotal">${kasirRp(c.sub)}</span></div>
@@ -1061,7 +1143,8 @@ function kasirRenderBody(){
     </div>`;
   const sel = (id,fn)=>{ const e = document.getElementById(id); if(e) e.onchange = fn; };
   sel('kSales', e=>{ t.sales = e.target.value; kasirSave(); kasirRenderTabsLabelsOnly(); });
-  sel('kBayar', e=>{ t.bayar = e.target.value; kasirSave(); });
+  sel('kBayar', e=>{ t.bayar = e.target.value; kasirSave(); kasirUpdateTotals(t); });
+  kasirBindTM(t);
   sel('kDiscType', e=>{ t.discType = e.target.value; kasirSave(); kasirUpdateTotals(t); });
   const kd = document.getElementById('kDisc'); if(kd) kd.oninput = e=>{ t.disc = Math.max(Number(e.target.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
   document.getElementById('kAdmin').oninput = e=>{ t.admin = Math.max(Number(e.target.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
@@ -1155,6 +1238,12 @@ function uploadView(){
       <div class="hint">File <b>SKEMA_LEASING_*.xlsx</b> (sheet REKAP). Isinya hanya bisa dilihat di tab <b>Skema Leasing</b> pada mode staff, tidak tampil di halaman umum / promotor.</div>
       <input type="file" id="fileInputSkema" accept=".xlsx,.xls">
       <div id="msgSkema" class="muted">${state.leasingUpdated ? 'Terakhir: '+state.leasingUpdated+' ('+state.leasingRows.length+' item)' : ''}</div>
+    </div>
+    <div class="uploadBlock">
+      <h3>5. Promo Tebus Murah / TM (khusus staff)</h3>
+      <div class="hint">File <b>TM_PROMO_TOKO_*_ALL_CBG.xlsx</b> (dibaca sheet <b>ALL CBG</b> dan <b>LOG</b>). Dipakai tab Kasir untuk memotong harga item TM dan HP otomatis.</div>
+      <input type="file" id="fileInputTM" accept=".xlsx,.xls">
+      <div id="msgTM" class="muted">${state.promoTMUpdated ? 'Terakhir: '+state.promoTMUpdated+' ('+(state.promoTM||[]).length+' paket)' : ''}</div>
     </div>
   </div>`;
 }
@@ -1296,10 +1385,80 @@ const _xlsxWorkerCode = `
     if(set.has('warehouse code') && (set.has('item no.') || set.has('item no'))) return 'stockCabang';
     return null;
   }
+  function parsePromoTM(wbSheets){
+    // wbSheets: {log: aoa, cbg: aoa}
+    const str = v => (v==null ? '' : String(v)).trim();
+    const num = v => (typeof v === 'number' ? v : (v===''||v==null ? NaN : parseFloat(String(v).replace(/[^0-9.-]/g,''))));
+    const CODE = /^[A-Z]{2,4}\\.[A-Z0-9]{2,5}\\.[A-Z0-9]+$/;
+    // --- sheet LOG: nilai per kode item (Jual, Potongan, Fix)
+    const byCode = {}, byDesc = {};
+    (wbSheets.log || []).forEach((r,i)=>{
+      if(i===0 || !r) return;
+      const c = str(r[0]); if(!CODE.test(c)) return;
+      const o = {c, ds: str(r[1]), rtl: num(r[3])||0, pot: num(r[4])||0, fix: num(r[5])||0};
+      byCode[c] = o; byDesc[o.ds.toLowerCase()] = o;
+    });
+    const aoa = wbSheets.cbg || [];
+    const BLOCKS = [2, 12, 22];
+    const state = BLOCKS.map(()=>({cur:null}));
+    let bandLo = null, note = '';
+    const pakets = [];
+    const resolve = (codeCell, descCell, row, c0)=>{
+      let c = str(codeCell);
+      if(CODE.test(c) && byCode[c]) return byCode[c];
+      if(CODE.test(c)) return {c, ds: str(descCell), rtl: num(row[c0+3])||0, pot: num(row[c0+4])||0, fix: num(row[c0+5])||0};
+      const d = str(descCell).toLowerCase();
+      return d && byDesc[d] ? byDesc[d] : null;
+    };
+    aoa.forEach((row, ri)=>{
+      if(!row) return;
+      const a = str(row[0]);
+      const m = /HARGA\\s+([0-9][0-9.,]*)\\s*JT/i.exec(a);
+      if(m){ bandLo = parseFloat(m[1].replace(',', '.')) * 1000000; note = ''; }
+      else if(/^DIATAS\\s+5\\s*JT/i.test(a)){ bandLo = 5000000; note = ''; }
+      const nm = /TIDAK BERLAKU[^]*$/i.exec(a);
+      if(nm) note = nm[0].trim();
+      BLOCKS.forEach((c0, bi)=>{
+        const pk = str(row[c0]), codeCell = row[c0+1], descCell = row[c0+2];
+        if(pk === 'Paket') return;
+        const st = state[bi];
+        const upper = pk.toUpperCase();
+        if(upper.indexOf('PAKET') === 0 && typeof row[c0+6] === 'number'){
+          if(upper.indexOf('TAMBAHAN') >= 0 || /TIPE KHUSUS/i.test(str(row[c0+8]))){ st.cur = null; return; }
+          const it = resolve(codeCell, descCell, row, c0);
+          if(!it || bandLo == null){ st.cur = null; return; }
+          st.cur = {id: 'P'+pakets.length, lo: bandLo, label: pk, variant: bi, hpVoucher: row[c0+6], hargaPaket: num(row[c0+7])||0, note, items: [{codes:[it]}]};
+          pakets.push(st.cur);
+          return;
+        }
+        if(!st.cur) return;
+        const isAtau = upper === 'ATAU' || str(codeCell).toLowerCase() === 'atau';
+        if(isAtau){
+          const it = resolve(str(codeCell).toLowerCase()==='atau' ? '' : codeCell, descCell, row, c0);
+          const last = st.cur.items[st.cur.items.length-1];
+          if(it && last && !last.codes.some(x=>x.c===it.c)) last.codes.push(it);
+          return;
+        }
+        if(upper === '' && CODE.test(str(codeCell))){
+          const it = resolve(codeCell, descCell, row, c0);
+          if(it) st.cur.items.push({codes:[it]});
+        }
+      });
+    });
+    // batas atas tiap rentang = batas bawah rentang berikutnya
+    const los = Array.from(new Set(pakets.map(p=>p.lo))).sort((x,y)=>x-y);
+    pakets.forEach(p=>{ const i = los.indexOf(p.lo); p.hi = i+1 < los.length ? los[i+1] : 999999999999; });
+    return pakets;
+  }
   onmessage = function(e){
     try{
       const {kind, buffer, fileName} = e.data;
       const wb = XLSX.read(buffer, {type:'array'});
+      if(kind === 'promoTM'){
+        const sh = n=>{ const w = wb.Sheets[n]; return w ? XLSX.utils.sheet_to_json(w, {header:1, raw:true, defval:''}) : []; };
+        postMessage({ok:true, kind, rows: parsePromoTM({log: sh('LOG'), cbg: sh('ALL CBG')}), fileName});
+        return;
+      }
       if(kind === 'leasing'){
         const ws = wb.Sheets['REKAP'] || wb.Sheets[wb.SheetNames[0]];
         const aoa = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:''});
@@ -1443,6 +1602,28 @@ function bindUpload(){
         applyLeasing(parsed, updatedAt);
         msg.style.color = 'var(--ok)';
         msg.textContent = `Terakhir: ${state.leasingUpdated} (${state.leasingRows.length} item)`;
+      }catch(err){
+        msg.style.color = '#e07a7a';
+        msg.textContent = 'Gagal mengunggah: ' + (err && err.message ? err.message : err);
+      }
+    });
+  };
+  document.getElementById('fileInputTM').onchange = (e)=>{
+    const file = e.target.files[0]; if(!file) return;
+    const msg = document.getElementById('msgTM');
+    msg.style.color = 'var(--muted)'; msg.textContent = 'Memproses file...';
+    readExcel(file, 'promoTM', async (parsed)=>{
+      if(!parsed || !parsed.length){
+        msg.style.color = '#e07a7a';
+        msg.textContent = 'Gagal: file tidak dikenali sebagai promo TM (butuh sheet ALL CBG dan LOG). Tidak ada yang diupload.';
+        return;
+      }
+      try{
+        msg.textContent = `Mengunggah ${parsed.length} paket...`;
+        const updatedAt = await pushToFirestore('promoTM', parsed, 'promoTM', (done,total)=>{ msg.textContent = `Mengunggah... bagian ${done}/${total}`; }, 400);
+        applyPromoTM(parsed, updatedAt);
+        msg.style.color = 'var(--ok)';
+        msg.textContent = `Terakhir: ${state.promoTMUpdated} (${parsed.length} paket)`;
       }catch(err){
         msg.style.color = '#e07a7a';
         msg.textContent = 'Gagal mengunggah: ' + (err && err.message ? err.message : err);
