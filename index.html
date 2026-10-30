@@ -135,7 +135,7 @@ const CHUNK_SIZE = 4000; // baris per dokumen Firestore (aman di bawah batas 1MB
 
 let state = {
   items: [], serialNumber: [], stockCabang: [], barcode: [], manualSupport: [],
-  itemsUpdated: '', serialUpdated: '', cabangUpdated: '', barcodeUpdated: '', manualSupportUpdated: '',
+  itemsSDN: [], itemsSDNUpdated: '', itemsUpdated: '', serialUpdated: '', cabangUpdated: '', barcodeUpdated: '', manualSupportUpdated: '',
   itemsIndex: {}, serialIndex: {}, cabangIndex: {}, barcodeIndex: {},
   manualIndex: {}, knownDescSet: new Set(),
   staffMode: false, tab: 'upload', showLogin: false, loginErr: '',
@@ -245,6 +245,7 @@ async function loadFromFirestore(collectionName, metaKey, tagChunk, knownUpdated
 function fmtDate(iso){ return iso ? new Date(iso).toLocaleString('id-ID') : ''; }
 
 const DATA_SETS = [
+  {key:'priceListSDN',  field:'itemsSDN',      upd:'itemsSDNUpdated'},
   {key:'priceList',     field:'items',         upd:'itemsUpdated'},
   {key:'serialNumber',  field:'serialNumber',  upd:'serialUpdated'},
   {key:'stockCabang',   field:'stockCabang',   upd:'cabangUpdated'},
@@ -296,6 +297,8 @@ function buildIndices(){
   // Price list baru hanya berisi {itemNo, harga}. Baris format lama (punya gudang/available) tetap dibaca sebagai cadangan.
   const priceMap = {};
   const legacy = {};
+  // Acuan utama harga: Report Stock & Pricelist SDN ALL; Reborn_PriceList hanya mengisi item yang tidak ada di sana.
+  state.itemsSDN.forEach(it=>{ if(it.harga > 0 && !(it.itemNo in priceMap)) priceMap[it.itemNo] = it.harga; });
   state.items.forEach(it=>{
     if(it.harga > 0 && !(it.itemNo in priceMap)) priceMap[it.itemNo] = it.harga;
     if(it.gudang !== undefined){
@@ -610,7 +613,7 @@ function stokHintHtml(){
     if(state.items.length && state.items.some(it=> it.gudang !== undefined)) miss.push('Reborn_PriceList');
     if(miss.length) oldNote = `<div class="loadNote">Data ${miss.join(' & ')} masih format lama \u2014 upload ulang filenya di tab Upload Excel supaya stok & filter Status akurat.</div>`;
   }
-  return `${oldNote}${state.itemsUpdated ? 'Price list: '+state.itemsUpdated : 'Price list belum ada.'}
+  return `${oldNote}${(state.itemsSDNUpdated||state.itemsUpdated) ? 'Price list: '+(state.itemsSDNUpdated||state.itemsUpdated) : 'Price list belum ada.'}
       ${state.serialUpdated ? ' &middot; Serial: '+state.serialUpdated : ''}
       ${state.cabangUpdated ? ' &middot; Stock: '+state.cabangUpdated : ''}
       ${state.manualSupportUpdated ? ' &middot; Pendukung manual: '+state.manualSupportUpdated : ''}
@@ -770,7 +773,7 @@ function runSearchAndRenderBody(){
   const body = document.getElementById('resultBody');
   if(!body) return;
   const q = state.query.trim();
-  const hasData = state.items.length||state.serialNumber.length||state.stockCabang.length;
+  const hasData = state.items.length||state.itemsSDN.length||state.serialNumber.length||state.stockCabang.length;
   if(!q && !filtersActive()){
     body.innerHTML = hasData ? '<div class="muted">Ketik untuk mulai mencari, atau buka Filter.</div>' : (state.pending>0 ? '<div class="muted">Memuat data...</div>' : '<div class="muted">Belum ada data.</div>');
     return;
@@ -802,7 +805,8 @@ function bindStok(){
 }
 
 function comboSummaryHtml(){
-  return `Price List (Reborn): ${state.itemsUpdated ? state.itemsUpdated+' ('+state.items.length+' item berharga)' : '-'}<br>
+  return `Report Stock & Pricelist SDN (acuan utama): ${state.itemsSDNUpdated ? state.itemsSDNUpdated+' ('+state.itemsSDN.length+' item berharga)' : '-'}<br>
+    Price List Reborn (pendukung): ${state.itemsUpdated ? state.itemsUpdated+' ('+state.items.length+' item berharga)' : '-'}<br>
     Serial Number: ${state.serialUpdated ? state.serialUpdated+' ('+state.serialNumber.length+' baris)' : '-'}<br>
     Stock Available: ${state.cabangUpdated ? state.cabangUpdated+' ('+state.stockCabang.length+' item)' : '-'}`;
 }
@@ -1214,8 +1218,8 @@ function bindKasir(){
 function uploadView(){
   return `<div class="card">
     <div class="uploadBlock">
-      <h3>1. Price List (Reborn), Serial Number & Stock Available</h3>
-      <div class="hint">Pilih langsung 1-3 file sekaligus (boleh sebagian) \u2014 jenisnya dikenali otomatis. <b>Price List:</b> file Reborn_PriceList (kolom Item No., Retail). <b>Stock Available:</b> nama file mengandung "Stock Available" (stok gudang sendiri + cabang lain). <b>Serial Number:</b> file SN. Kalau ada file yang tidak dikenali, semua upload pada batch ini dibatalkan.</div>
+      <h3>1. Report Stock & Pricelist SDN, Price List Reborn, Serial Number & Stock Available</h3>
+      <div class="hint">Pilih langsung 1-4 file sekaligus (boleh sebagian) \u2014 jenisnya dikenali otomatis. <b>Report Stock & Pricelist SDN ALL:</b> acuan utama harga (kolom Item No., List Price). <b>Price List Reborn:</b> pendukung, hanya dipakai untuk item yang tidak ada di report (kolom Item No., Retail-AMT). <b>Stock Available:</b> nama file mengandung "Stock Available" (stok gudang sendiri + cabang lain). <b>Serial Number:</b> file SN. Kalau ada file yang tidak dikenali, semua upload pada batch ini dibatalkan.</div>
       <input type="file" id="fileInputCombo" accept=".xlsx,.xls,.csv" multiple>
       <div id="msgCombo" class="muted"></div>
       <div id="comboSummary" class="muted" style="margin-top:8px;line-height:1.6;">${comboSummaryHtml()}</div>
@@ -1264,6 +1268,16 @@ const _xlsxWorkerCode = `
     return isNaN(n) ? 0 : n;
   }
   function transform(kind, rows){
+    if(kind === 'priceListSDN'){
+      // Report Stock & Pricelist SDN ALL: harga dari kolom List Price (satu harga per item, baris gudang ganda diabaikan).
+      const seen = {}, out = [];
+      rows.forEach(r=>{
+        const itemNo = String(pick(r,['Item No.','Item No'])||'').trim();
+        const harga = toNumber(pick(r,['List Price']));
+        if(itemNo && harga > 0 && !(itemNo in seen)){ seen[itemNo] = 1; out.push({itemNo, harga}); }
+      });
+      return out;
+    }
     if(kind === 'priceList'){
       // File Reborn_PriceList: harga diambil dari kolom Retail-AMT. Item tanpa harga dibuang.
       const out = [];
@@ -1379,7 +1393,7 @@ const _xlsxWorkerCode = `
     const norm = s => String(s).trim().toLowerCase().replace(/\\s+/g,' ');
     const set = new Set(headers.map(norm));
     if(set.has('retail') && set.has('gro-1')) return 'priceList';
-    if(set.has('list price')) return null; // format price list lama sudah tidak dipakai
+    if(set.has('list price') && (set.has('item no.') || set.has('item no'))) return 'priceListSDN';
     if(set.has('serial number') || set.has('admission date')) return 'serialNumber';
     if(set.has('warehouse code') && (set.has('item no.') || set.has('item no'))) return 'stockCabang';
     return null;
@@ -1534,12 +1548,15 @@ function bindUpload(){
           return;
         }
         // semua file valid & jenisnya unik -> upload satu per satu
-        const labels = {priceList:'Price List', serialNumber:'Serial Number', stockCabang:'Stock Available'};
+        const labels = {priceListSDN:'Report Stock & Pricelist SDN', priceList:'Price List Reborn', serialNumber:'Serial Number', stockCabang:'Stock Available'};
         for(const r of results){
           msg.style.color = 'var(--muted)';
           msg.textContent = `Mengunggah ${labels[r.kind]} (${r.rows.length} baris)...`;
           const progressCb = (done,total)=>{ msg.textContent = `Mengunggah ${labels[r.kind]}... bagian ${done}/${total}`; };
-          if(r.kind === 'priceList'){
+          if(r.kind === 'priceListSDN'){
+            const updatedAt = await pushToFirestore('priceListSDN', r.rows, 'priceListSDN', progressCb);
+            state.itemsSDN = r.rows; state.itemsSDNUpdated = fmtDate(updatedAt);
+          } else if(r.kind === 'priceList'){
             const updatedAt = await pushToFirestore('priceList', r.rows, 'priceList', progressCb);
             state.items = r.rows; state.itemsUpdated = fmtDate(updatedAt);
           } else if(r.kind === 'serialNumber'){
