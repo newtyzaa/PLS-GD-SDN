@@ -142,7 +142,7 @@ let state = {
   filters: {brand:[], jenis:[], tipe:[], harga:[], status:[], xs:[]}, filterOpen: false, pending: 0, loadFail: false,
   query: '', loaded: false, dataVer: 0,
   publicView: 'stok', promotorBrand: null,
-  promoTM: [], promoTMUpdated: '', leasingHeader: null, leasingRows: [], leasingUpdated: '', leasingErr: '', skemaQuery: '', skemaProvider: null
+  promoTM: [], promoTMUpdated: '', gmcPhoto: '', gmcUpdated: '', leasingHeader: null, leasingRows: [], leasingUpdated: '', leasingErr: '', skemaQuery: '', skemaProvider: null
 };
 
 // ---------------- Firestore helpers ----------------
@@ -351,7 +351,10 @@ async function loadPromoTM(){
   try{ const r = await loadFromFirestore('promoTM', 'promoTM'); applyPromoTM(r.rows, r.updatedAt); }catch(e){}
   if(state.staffMode && state.loaded && state.tab==='kasir') kasirRenderBody();
 }
-function clearPromoTM(){ state.promoTM = []; state.promoTMUpdated = ''; idbDel('promoTM'); }
+function clearPromoTM(){ state.promoTM = []; state.promoTMUpdated = ''; idbDel('promoTM'); state.gmcPhoto = ''; state.gmcUpdated = ''; }
+async function loadGmc(){
+  try{ const r = await loadFromFirestore('gmartCare', 'gmartCare'); state.gmcPhoto = (r.rows[0] && r.rows[0].img) || ''; state.gmcUpdated = fmtDate(r.updatedAt); }catch(e){}
+}
 function clearLeasing(){
   state.leasingHeader = null; state.leasingRows = []; state.leasingUpdated = ''; state.leasingErr = '';
   state.skemaQuery = ''; state.skemaProvider = null;
@@ -359,7 +362,7 @@ function clearLeasing(){
 }
 auth.onAuthStateChanged(user=>{
   state.staffMode = !!user;
-  if(user){ loadLeasing(); loadPromoTM(); }
+  if(user){ loadLeasing(); loadPromoTM(); loadGmc(); }
   else { clearLeasing(); clearPromoTM(); if(state.tab==='skema' || state.tab==='kasir') state.tab = 'stok'; }
   if(state.loaded) render();
 });
@@ -955,6 +958,35 @@ function kasirLine(i){
   d = Math.min(d + tm, gross);
   return {gross, d, tm, net: gross - d};
 }
+// ---- GMart Care (garansi tambahan, tabel dari foto) ----
+// Tier berdasarkan harga HP (SRP): batas atas tiap tier & harga jual 12 / 24 bulan.
+const GMC_TIERS = [
+  {max: 3000000,  m12: 90000,  m24: 185000},
+  {max: 4000000,  m12: 125000, m24: 255000},
+  {max: 6000000,  m12: 135000, m24: 275000},
+  {max: 8000000,  m12: 150000, m24: 305000},
+  {max: 10000000, m12: 160000, m24: 325000},
+  {max: 16000000, m12: 180000, m24: 365000},
+  {max: 21000000, m12: 200000, m24: 405000},
+  {max: 30000000, m12: 350000, m24: 705000},
+  {max: 40000000, m12: 450000, m24: 905000},
+  {max: 50000000, m12: 600000, m24: 1205000}
+];
+function gmcTier(price){
+  price = Number(price)||0;
+  if(price < 1000000) return null;
+  const i = GMC_TIERS.findIndex(t=> price <= t.max);
+  return i < 0 ? null : Object.assign({n: i+1}, GMC_TIERS[i]);
+}
+function kasirAddGmc(t, hp, months){
+  const tr = gmcTier(hp.base || hp.price); if(!tr) return;
+  const price = months === 24 ? tr.m24 : tr.m12;
+  const key = 'GMC'+months+'::'+hp.key;
+  const ex = t.items.find(i=>i.key===key);
+  if(ex){ ex.qty = hp.qty; ex.price = price; ex.base = price; }
+  else t.items.push({key, no:'GMART-CARE', ds:'GMart Care '+months+' Bulan - '+hp.ds, base: price, price, qty: hp.qty||1, disc:0, discType:'rp', sn:'', bc:''});
+  kasirSave(); kasirUpdateBadge(); kasirRenderBody(); kasirRenderTabsLabelsOnly();
+}
 // ---- Potongan Tebus Murah (TM) otomatis ----
 const TM_OK_BAYAR = ['Cash or Transfer','Debit'];
 const _tmInfo = {};
@@ -1114,6 +1146,7 @@ function kasirRenderBody(){
         <select class="kItemDiscType"><option value="rp" ${i.discType==='rp'?'selected':''}>Rp</option><option value="pct" ${i.discType==='pct'?'selected':''}>%</option></select>
         <span class="muted" id="kND_${sid}">${(kasirLine(i).d-kasirLine(i).tm) ? 'nego -'+kasirRp(kasirLine(i).d-kasirLine(i).tm) : ''}${kasirLine(i).tm ? ' TM -'+kasirRp(kasirLine(i).tm) : ''}</span>
       </div>
+      ${/^GAD\./.test(i.no) ? (()=>{ const tr = gmcTier(i.base||i.price); return tr ? `<div class="kLine" style="margin-top:6px;"><span class="muted">GMart Care (tier ${tr.n}):</span><button class="small ghost kGmc" data-m="12" type="button">+ 12 bln ${kasirRp(tr.m12)}</button><button class="small ghost kGmc" data-m="24" type="button">+ 24 bln ${kasirRp(tr.m24)}</button></div>` : `<div class="muted" style="font-size:12px;margin-top:6px;">GMart Care: harga HP di luar range tabel (1jt - 50jt)</div>`; })() : ''}
       <div class="kLine" style="margin-top:6px;"><input type="text" class="kSn" placeholder="SN / IMEI / keterangan (opsional)" value="${escHtml(i.sn)}"></div>
     </div>`;
   }).join('') : '<div class="muted" style="padding:8px 0;">Belum ada item. Tambahkan lewat tombol <b>+ Kasir</b> di tab Cek Stok.</div>';
@@ -1124,6 +1157,7 @@ function kasirRenderBody(){
       <select id="kBayar">${opt(KASIR_BAYAR,t.bayar,'Metode pembayaran')}</select>
     </div>
     <div id="kTM" class="kTM">${kasirTMHtml(t)}</div>
+    ${state.gmcPhoto ? `<details class="kTM"><summary>Lihat tabel GMart Care (foto)</summary><img src="${state.gmcPhoto}" style="max-width:100%;margin-top:8px;border-radius:8px;"></details>` : ''}
     ${rows}
     <div class="kTotals">
       <div class="kLine"><span>Subtotal</span><span class="kSub" id="kSubtotal">${kasirRp(c.sub)}</span></div>
@@ -1164,6 +1198,7 @@ function kasirRenderBody(){
     const idEl = row.querySelector('.kItemDisc'), idType = row.querySelector('.kItemDiscType');
     idEl.oninput = ()=>{ it.disc = Math.max(Number(idEl.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
     idType.onchange = ()=>{ it.discType = idType.value; kasirSave(); kasirUpdateTotals(t); };
+    row.querySelectorAll('.kGmc').forEach(b=>{ b.onclick = ()=> kasirAddGmc(t, it, Number(b.dataset.m)); });
     row.querySelector('.kSn').oninput = e=>{ it.sn = e.target.value; kasirSave(); };
     row.querySelector('.kDel').onclick = ()=>{ t.items = t.items.filter(x=>x!==it); kasirSave(); kasirRenderBody(); kasirRenderTabsLabelsOnly(); };
   });
@@ -1241,6 +1276,13 @@ function uploadView(){
       <div class="hint">File <b>SKEMA_LEASING_*.xlsx</b> (sheet REKAP). Isinya hanya bisa dilihat di tab <b>Skema Leasing</b> pada mode staff, tidak tampil di halaman umum / promotor.</div>
       <input type="file" id="fileInputSkema" accept=".xlsx,.xls">
       <div id="msgSkema" class="muted">${state.leasingUpdated ? 'Terakhir: '+state.leasingUpdated+' ('+state.leasingRows.length+' item)' : ''}</div>
+    </div>
+    <div class="uploadBlock">
+      <h3>6. Foto tabel GMart Care (khusus staff)</h3>
+      <div class="hint">Foto daftar garansi per range harga HP. Dipakai sebagai referensi yang bisa dilihat di tab Kasir. Harga tiap tier sudah tertanam di aplikasi (sesuai foto: 12 & 24 bulan, tier 1\u201310).</div>
+      <input type="file" id="fileInputGmc" accept="image/*">
+      <div id="msgGmc" class="muted">${state.gmcUpdated ? 'Terakhir: '+state.gmcUpdated : ''}</div>
+      ${state.gmcPhoto ? `<img src="${state.gmcPhoto}" style="max-width:240px;margin-top:8px;border-radius:8px;">` : ''}
     </div>
     <div class="uploadBlock">
       <h3>5. Promo Tebus Murah / TM (khusus staff)</h3>
@@ -1623,6 +1665,28 @@ function bindUpload(){
         msg.textContent = 'Gagal mengunggah: ' + (err && err.message ? err.message : err);
       }
     });
+  };
+  document.getElementById('fileInputGmc').onchange = (e)=>{
+    const file = e.target.files[0]; if(!file) return;
+    const msg = document.getElementById('msgGmc');
+    msg.style.color = 'var(--muted)'; msg.textContent = 'Memproses foto...';
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = async ()=>{
+      try{
+        const sc = Math.min(1, 1400 / Math.max(img.width, img.height));
+        const cv = document.createElement('canvas'); cv.width = Math.round(img.width*sc); cv.height = Math.round(img.height*sc);
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        const data = cv.toDataURL('image/jpeg', 0.7);
+        URL.revokeObjectURL(url);
+        if(data.length > 900000) throw new Error('foto terlalu besar setelah dikompres');
+        msg.textContent = 'Mengunggah foto...';
+        const updatedAt = await pushToFirestore('gmartCare', [{img: data}], 'gmartCare', null, 1);
+        state.gmcPhoto = data; state.gmcUpdated = fmtDate(updatedAt);
+        msg.style.color = 'var(--ok)'; msg.textContent = 'Terakhir: '+state.gmcUpdated;
+      }catch(err){ msg.style.color = '#e07a7a'; msg.textContent = 'Gagal: '+(err && err.message ? err.message : err); }
+    };
+    img.onerror = ()=>{ msg.style.color = '#e07a7a'; msg.textContent = 'File bukan gambar yang valid.'; };
+    img.src = url;
   };
   document.getElementById('fileInputTM').onchange = (e)=>{
     const file = e.target.files[0]; if(!file) return;
