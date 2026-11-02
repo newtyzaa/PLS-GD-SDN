@@ -732,7 +732,12 @@ function buildResults(q){
     all = all.filter(r=>{ const pr = recPrice(r); return pr > 0 && bands.some(b=> pr > b.lo && pr <= b.hi); });
   }
   if(F.status.length) all = all.filter(r=> F.status.includes(recStatus(r)));
-  return all;
+  // Item yang ada stok di gudang sendiri (ready & ready-indent) selalu di atas, lalu indent, terakhir yang kosong.
+  // Urutan sebelumnya dipertahankan di dalam tiap kelompok (sort stabil).
+  const rk = {'ready':0,'ready-indent':0,'indent':1,'':2};
+  const keyed = all.map((r,i)=>({r,i,k:rk[recStatus(r)]}));
+  keyed.sort((a,b)=>a.k-b.k||a.i-b.i);
+  return keyed.map(x=>x.r);
 }
 function itemCardHtml(rec, idx){
   const plTable = rec.plRows.length ? `
