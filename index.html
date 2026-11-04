@@ -83,6 +83,7 @@ th{color:var(--muted);font-weight:500;}
 .kLine{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .kLine input[type=number],.kLine input[type=text],.kLine select{margin-bottom:0;width:auto;}
 .kTM{margin:8px 0;padding:8px 10px;border:1px dashed var(--line,#444);border-radius:8px;font-size:13px;} .kTMHead{display:flex;gap:6px;align-items:center;} .kTMOk{color:var(--ok);margin-top:4px;} .kTMWarn{color:#e0a53a;margin-top:4px;} .kTMNote{color:var(--muted);margin-top:4px;font-size:12px;}
+.nOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;display:flex;align-items:center;justify-content:center;padding:12px;overflow:auto;} .nBox{max-height:100%;overflow:auto;} .nBtns{display:flex;gap:8px;justify-content:center;margin-top:10px;}
 .kLine input.kPrice{width:130px;} .kLine input.kQty{width:56px;text-align:center;} .kLine input.kSn{flex:1;min-width:120px;}
 .kSub{margin-left:auto;font-weight:600;white-space:nowrap;}
 .kPriceChanged{border-color:var(--amber) !important;}
@@ -1084,6 +1085,47 @@ function kasirCopy(text, label){
   };
   if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fb); else fb();
 }
+function kasirNotaHtml(t){
+  const c = kasirCalc(t);
+  const d = new Date(), pad = n=>String(n).padStart(2,'0');
+  const tgl = pad(d.getDate())+'/'+pad(d.getMonth()+1)+'/'+d.getFullYear();
+  const num = n=> (Number(n)||0).toLocaleString('en-US');
+  const rows = t.items.map((i,n)=>`<tr><td class="n">${n+1}</td><td class="d">${escHtml(i.ds)}</td><td class="q">${i.qty}</td><td class="r">${num(i.price)}</td><td class="r">${num((Number(i.price)||0)*(Number(i.qty)||0))}</td></tr>`).join('');
+  const qty = t.items.reduce((a,i)=>a+(Number(i.qty)||0),0);
+  const disc = c.itemDisc + c.disc;
+  return `<div class="nota">
+    <div class="nHead"><div><b class="nBrand">GADGETMART</b><div class="nSm">PT. SINAR JAYA SELULAR<br>JL BELITUNG LAUT RT 006 RW 001<br>NPWP: 10.951.343.2-731.000</div></div>
+    <div class="nRight"><div>${escHtml((t.bayar||'-').toUpperCase())} SDN</div><div class="nSm2">Telp :</div><div class="nSm2">Tgl &nbsp;${tgl}</div></div></div>
+    <table class="nTbl"><thead><tr><th></th><th>Perincian</th><th>Qty</th><th class="r">Price</th><th class="r">Total</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="nSum">
+      <div><span>Sales &nbsp;${escHtml(t.sales||'-')}</span><span>Sub Total</span><b>${num(c.gross)}</b></div>
+      <div><span>Total Qty &nbsp;${qty.toFixed(2)}</span><span>Disc</span><b>${num(disc)}</b></div>
+      ${c.admin > 0 ? `<div><span></span><span>Admin</span><b>${num(c.admin)}</b></div>` : ''}
+      <div><span>KSSDN1</span><span>Total</span><b>${num(c.total)}</b></div>
+    </div>
+    <div class="nMid">Mohon periksa kembali & pastikan barang yang anda beli<br>dalam keadaan mulus & lengkap</div>
+    <div class="nSign"><span>Hormat kami,</span><span>Penerima,</span><span>Pemeriksa,</span></div>
+    <div class="nFoot"><i>Harga diatas sudah termasuk pajak</i></div>
+  </div>`;
+}
+function kasirShowNota(t){
+  const old = document.getElementById('nOverlay'); if(old) old.remove();
+  const ov = document.createElement('div'); ov.id = 'nOverlay'; ov.className = 'nOverlay';
+  ov.innerHTML = `<style>${NOTA_CSS}</style><div class="nBox">${kasirNotaHtml(t)}<div class="nBtns"><button type="button" id="nPrint">Cetak</button><button type="button" class="ghost" id="nClose">Tutup</button></div></div>`;
+  document.body.appendChild(ov);
+  ov.onclick = e=>{ if(e.target === ov) ov.remove(); };
+  document.getElementById('nClose').onclick = ()=> ov.remove();
+  document.getElementById('nPrint').onclick = ()=>{
+    const w = window.open('', '_blank'); if(!w){ kasirToast('Pop-up diblokir browser'); return; }
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Nota</title><style>'+NOTA_CSS+'body{margin:12px;}</style></head><body>'+kasirNotaHtml(t)+'</body></html>');
+    w.document.close(); w.focus(); setTimeout(()=>w.print(), 300);
+  };
+}
+const NOTA_CSS = `.nota{background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;font-size:13px;width:360px;max-width:100%;padding:12px;border:1px dashed #888;box-sizing:border-box;}
+.nHead{display:flex;justify-content:space-between;gap:8px;} .nBrand{font-size:17px;} .nSm{font-size:10px;line-height:1.25;} .nRight{text-align:left;font-size:13px;} .nSm2{font-size:12px;}
+.nTbl{width:100%;border-collapse:collapse;margin-top:10px;} .nTbl th{color:#000;font-weight:normal;text-align:left;font-size:12px;} .nTbl td{vertical-align:top;padding:1px 2px;} .nTbl .r{text-align:right;} .nTbl .q{text-align:center;} .nTbl .n{width:14px;}
+.nSum{margin-top:14px;} .nSum div{display:flex;justify-content:space-between;gap:8px;} .nSum div span:first-child{flex:1;} .nSum div span:nth-child(2){width:80px;} .nSum div b{font-weight:normal;min-width:70px;text-align:right;}
+.nMid{text-align:center;margin-top:12px;font-size:12px;} .nSign{display:flex;justify-content:space-around;margin-top:8px;font-size:12px;} .nFoot{margin-top:40px;font-size:10px;}`;
 function kasirRp(n){ n = Number(n)||0; return (n<0?'-':'') + 'Rp' + Math.abs(n).toLocaleString('id-ID'); }
 function kasirSummaryText(t){
   const c = kasirCalc(t);
@@ -1198,6 +1240,7 @@ function kasirRenderBody(){
     <input type="text" id="kNote" placeholder="Catatan (nama pembeli, dll)" value="${escHtml(t.note)}" style="margin-top:10px;">
     <div class="kBtns">
       <button type="button" id="kCopy" class="ghost">Salin ringkasan</button>
+      <button type="button" id="kNota" class="ghost">Lihat nota</button>
       <button type="button" id="kDone">Selesai (hapus catatan)</button>
       <button type="button" id="kCancel" class="kDanger">Batalkan transaksi</button>
     </div>`;
@@ -1232,6 +1275,7 @@ function kasirRenderBody(){
     row.querySelector('.kSn').oninput = e=>{ it.sn = e.target.value; kasirSave(); };
     row.querySelector('.kDel').onclick = ()=>{ t.items = t.items.filter(x=>x!==it); kasirSave(); kasirRenderBody(); kasirRenderTabsLabelsOnly(); };
   });
+  document.getElementById('kNota').onclick = ()=> kasirShowNota(t);
   document.getElementById('kCopy').onclick = ()=>{
     const txt = kasirSummaryText(t);
     const ok = ()=> kasirToast('Ringkasan disalin');
