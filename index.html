@@ -1071,6 +1071,19 @@ function kasirCalc(t){
   if(t.adminType === 'pct') admin = Math.round(base * admin / 100);
   return {gross, itemDisc, sub, disc, admin, total: base + admin};
 }
+function kasirCopy(text, label){
+  text = String(text);
+  const ok = ()=> kasirToast(label+' disalin: '+text);
+  const fb = ()=>{
+    try{
+      const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); const done = document.execCommand('copy'); ta.remove();
+      if(done) return ok();
+    }catch(e){}
+    window.prompt('Salin teks ini:', text);
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fb); else fb();
+}
 function kasirRp(n){ n = Number(n)||0; return (n<0?'-':'') + 'Rp' + Math.abs(n).toLocaleString('id-ID'); }
 function kasirSummaryText(t){
   const c = kasirCalc(t);
@@ -1152,6 +1165,11 @@ function kasirRenderBody(){
         <span class="muted" id="kND_${sid}">${(kasirLine(i).d-kasirLine(i).tm) ? 'nego -'+kasirRp(kasirLine(i).d-kasirLine(i).tm) : ''}${kasirLine(i).tm ? ' TM -'+kasirRp(kasirLine(i).tm) : ''}</span>
       </div>
       ${/^GAD\./.test(i.no) ? (()=>{ const tr = gmcTier(i.base||i.price); return tr ? `<div class="kLine" style="margin-top:6px;"><span class="muted">GMart Care (tier ${tr.n}):</span><button class="small ghost kGmc" data-m="12" type="button">+ 12 bln ${kasirRp(tr.m12)}</button><button class="small ghost kGmc" data-m="24" type="button">+ 24 bln ${kasirRp(tr.m24)}</button></div>` : `<div class="muted" style="font-size:12px;margin-top:6px;">GMart Care: harga HP di luar range tabel (1jt - 50jt)</div>`; })() : ''}
+      <div class="kLine kCopyRow" style="margin-top:6px;"><span class="muted">Salin</span>
+        <button class="small ghost kCp" data-f="no" type="button">Kode</button>
+        ${kasirBarcode(i) ? '<button class="small ghost kCp" data-f="bc" type="button">Barcode</button>' : ''}
+        <button class="small ghost kCp" data-f="price" type="button">Harga</button>
+        <button class="small ghost kCp" data-f="net" type="button">Total</button></div>
       <div class="kLine" style="margin-top:6px;"><input type="text" class="kSn" placeholder="SN / IMEI / keterangan (opsional)" value="${escHtml(i.sn)}"></div>
     </div>`;
   }).join('') : '<div class="muted" style="padding:8px 0;">Belum ada item. Tambahkan lewat tombol <b>+ Kasir</b> di tab Cek Stok.</div>';
@@ -1203,6 +1221,13 @@ function kasirRenderBody(){
     const idEl = row.querySelector('.kItemDisc'), idType = row.querySelector('.kItemDiscType');
     idEl.oninput = ()=>{ it.disc = Math.max(Number(idEl.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
     idType.onchange = ()=>{ it.discType = idType.value; kasirSave(); kasirUpdateTotals(t); };
+    row.querySelectorAll('.kCp').forEach(b=>{ b.onclick = ()=>{
+      const f = b.dataset.f, l = kasirLine(it);
+      if(f === 'no') kasirCopy(it.no, 'Kode');
+      else if(f === 'bc') kasirCopy(kasirBarcode(it), 'Barcode');
+      else if(f === 'price') kasirCopy(Math.round(l.net / (Number(it.qty)||1)), 'Harga satuan (setelah potongan)');
+      else kasirCopy(l.net, 'Total baris');
+    }; });
     row.querySelectorAll('.kGmc').forEach(b=>{ b.onclick = ()=> kasirAddGmc(t, it, Number(b.dataset.m)); });
     row.querySelector('.kSn').oninput = e=>{ it.sn = e.target.value; kasirSave(); };
     row.querySelector('.kDel').onclick = ()=>{ t.items = t.items.filter(x=>x!==it); kasirSave(); kasirRenderBody(); kasirRenderTabsLabelsOnly(); };
