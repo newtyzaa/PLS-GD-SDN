@@ -451,6 +451,9 @@ function memoFilterOptions(){
 }
 function getCategories(){ return memoFilterOptions().cats; }
 const BRAND_NAMES = {SAM:'Samsung',OPO:'Oppo',VIV:'Vivo',XMI:'Xiaomi',IFX:'Infinix',APL:'Apple',HWI:'Huawei',RLM:'Realme',TCN:'Tecno',RAP:'RAPA',RBT:'Robot',UGR:'Ugreen'};
+// Nama lengkap brand untuk menu Stock Promotor (kode di luar daftar ini tampil apa adanya).
+const GAD_BRAND_FULL = {SAM:'SAMSUNG',OPO:'OPPO',VIV:'VIVO',XMI:'XIAOMI',IFX:'INFINIX',APL:'APPLE',HWI:'HUAWEI',RLM:'REALME',TCN:'TECNO',RAP:'RAPA',RBT:'ROBOT',UGR:'UGREEN',ACR:'ACER',ADV:'ADVAN',ASS:'ASUS',ITV:'ITEL',LEN:'LENOVO',MTL:'MOTOROLA',NOK:'NOKIA',VLN:'VILLAON'};
+function gadBrandName(code){ return GAD_BRAND_FULL[code] || code; }
 const MAIN_BRANDS = ['SAM','OPO','VIV','XMI','IFX','APL','HWI','RLM','TCN','RAP','RBT','UGR']; // brand lain digabung ke tombol "Other"
 
 const JENIS_OPTS = [
@@ -585,7 +588,7 @@ function promotorRows(brand){
 }
 function promotorView(){
   const brands = getGadBrands();
-  const chips = brands.map(b=>`<div class="tab ${state.promotorBrand===b?'active':''}" data-brand="${b}">${b}</div>`).join('');
+  const chips = brands.map(b=>`<div class="tab ${state.promotorBrand===b?'active':''}" data-brand="${b}">${gadBrandName(b)}</div>`).join('');
   let tableHtml = '';
   if(state.promotorBrand){
     const rows = promotorRows(state.promotorBrand);
