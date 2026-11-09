@@ -83,6 +83,7 @@ th{color:var(--muted);font-weight:500;}
 .kLine{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .kLine input[type=number],.kLine input[type=text],.kLine select{margin-bottom:0;width:auto;}
 .kTM{margin:8px 0;padding:8px 10px;border:1px dashed var(--line,#444);border-radius:8px;font-size:13px;} .kTMHead{display:flex;gap:6px;align-items:center;} .kTMOk{color:var(--ok);margin-top:4px;} .kTMWarn{color:#e0a53a;margin-top:4px;} .kTMNote{color:var(--muted);margin-top:4px;font-size:12px;}
+.cpBtn{font-size:11px;padding:1px 7px;margin-left:4px;border-radius:6px;border:1px solid var(--line,#555);background:transparent;color:var(--muted);cursor:pointer;vertical-align:middle;font-weight:normal;} .cpBtn:active{opacity:.6;}
 .nOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;display:flex;align-items:center;justify-content:center;padding:12px;overflow:auto;} .nBox{max-height:100%;overflow:auto;} .nBtns{display:flex;gap:8px;justify-content:center;margin-top:10px;}
 .kLine input.kPrice{width:130px;} .kLine input.kQty{width:56px;text-align:center;} .kLine input.kSn{flex:1;min-width:120px;}
 .kSub{margin-left:auto;font-weight:600;white-space:nowrap;}
@@ -743,6 +744,9 @@ function buildResults(q){
   keyed.sort((a,b)=>a.k-b.k||a.i-b.i);
   return keyed.map(x=>x.r);
 }
+function cpBtn(text, label){
+  return `<button type="button" class="cpBtn" data-copy="${escHtml(String(text))}" data-label="${escHtml(label)}" title="Salin ${escHtml(label)}">Salin</button>`;
+}
 function itemCardHtml(rec, idx){
   const plTable = rec.plRows.length ? `
     <div class="tablewrap"><table>
@@ -760,7 +764,7 @@ function itemCardHtml(rec, idx){
       const isOld = oldest && d && d.getTime()===oldest.getTime();
       const statusLabel = sn.status ? ` &middot; ${sn.status}` : '';
       const allocClass = /allocated/i.test(sn.status||'') ? ' allocated' : '';
-      return `<span class="snChip ${isOld?'old':''}${allocClass}">${sn.serial} &middot; ${sn.tanggal||'-'}${statusLabel}${isOld?' (FIFO)':''}</span>`;
+      return `<span class="snChip ${isOld?'old':''}${allocClass}">${sn.serial} &middot; ${sn.tanggal||'-'}${statusLabel}${isOld?' (FIFO)':''} ${cpBtn(sn.serial,'IMEI/SN')}</span>`;
     }).join('');
     return `<div class="snGroupLabel">Serial Number &mdash; ${gudang}</div><div class="snList">${chips}</div>`;
   }).join('');
@@ -771,11 +775,11 @@ function itemCardHtml(rec, idx){
       ? `<details class="indentDetails"><summary>Status: Indent (klik untuk lihat gudang lain)</summary><div class="indentList">Tersedia di gudang: ${indentList}</div></details>`
       : `<div class="indentBox">Status: Indent &mdash; tersedia di gudang: ${indentList}</div>`
   ) : '';
-  const barcodeLine = rec.barcode ? `<div class="muted" style="margin:-4px 0 10px;">Barcode: ${rec.barcode}${rec.barcodeFromManual ? ' (manual)' : ''}</div>` : '';
+  const barcodeLine = rec.barcode ? `<div class="muted" style="margin:-4px 0 10px;">Barcode: ${rec.barcode}${rec.barcodeFromManual ? ' (manual)' : ''} ${cpBtn(rec.barcode,'Barcode')}</div>` : '';
   const body = rec.manualOnly ? `${barcodeLine}${rec.manualHarga ? `<div style="margin:2px 0 10px;font-weight:600;">Harga: Rp${Number(rec.manualHarga).toLocaleString('id-ID')} <span class="muted">(referensi manual)</span></div>` : ''}${indent}`
     : `${barcodeLine}${plTable}${ownSerialBlocks}${indent}`;
   const kBtn = (state.staffMode && idx !== undefined) ? `<button class="small ghost kasirAdd" data-idx="${idx}" style="float:right;margin-left:8px;">+ Kasir</button>` : '';
-  return `<div class="itemCard">${kBtn}<h3>${rec.deskripsi} <span class="itemNo">(${rec.itemNo})</span></h3>${body}</div>`;
+  return `<div class="itemCard">${kBtn}<h3>${rec.deskripsi} <span class="itemNo">(${rec.itemNo})</span>${rec.itemNo && rec.itemNo !== '(data manual)' ? ' '+cpBtn(rec.itemNo,'Kode item') : ''}</h3>${body}</div>`;
 }
 
 const RESULT_CAP = 40;
@@ -808,6 +812,8 @@ function bindStok(){
   };
   bindFilterChips();
   document.getElementById('resultBody').onclick = (e)=>{
+    const cp = e.target.closest && e.target.closest('.cpBtn');
+    if(cp){ kasirCopy(cp.dataset.copy, cp.dataset.label); return; }
     const b = e.target.closest && e.target.closest('.kasirAdd');
     if(!b) return;
     const rec = _shownResults[Number(b.dataset.idx)];
