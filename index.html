@@ -1147,6 +1147,7 @@ function kasirSummaryText(t){
   if(c.disc > 0) lines.push('Potongan transaksi: -'+kasirRp(c.disc)+(t.discType==='pct' ? ' ('+t.disc+'%)' : ''));
   if(c.admin > 0) lines.push('Biaya admin: +'+kasirRp(c.admin)+(t.adminType==='pct' ? ' ('+t.admin+'%)' : ''));
   lines.push('TOTAL: '+kasirRp(c.total));
+  if(Number(t.paid) > 0) lines.push('Diterima: '+kasirRp(t.paid)+' | '+((Number(t.paid)-c.total) >= 0 ? 'Kembalian: '+kasirRp(Number(t.paid)-c.total) : 'Kurang: '+kasirRp(c.total-Number(t.paid))));
   if(t.note) lines.push('Catatan: '+t.note);
   return lines.join('\n');
 }
@@ -1178,8 +1179,17 @@ function kasirUpdateTotals(t){
   const set = (id,v)=>{ const e = document.getElementById(id); if(e) e.textContent = v; };
   set('kSubtotal', kasirRp(c.gross)); set('kItemDisc', '-'+kasirRp(c.itemDisc)); set('kDiscAmt', '-'+kasirRp(c.disc)); set('kAdminAmt', '+'+kasirRp(c.admin)); set('kTotal', kasirRp(c.total));
   t.items.forEach(i=>{ const l = kasirLine(i), sid = i.key.replace(/[^A-Za-z0-9]/g,'_'); set('kSub_'+sid, kasirRp(l.net)); set('kND_'+sid, (l.d-l.tm ? 'nego -'+kasirRp(l.d-l.tm) : '') + (l.tm ? ' TM -'+kasirRp(l.tm) : '')); });
+  const chEl = document.getElementById('kChangeRow'); if(chEl) chEl.innerHTML = kasirChangeHtml(t);
   const tmEl = document.getElementById('kTM'); if(tmEl){ tmEl.innerHTML = kasirTMHtml(t); kasirBindTM(t); }
   kasirRenderTabsLabelsOnly();
+}
+function kasirChangeHtml(t){
+  const c = kasirCalc(t), paid = Number(t.paid)||0;
+  if(!paid) return '<span class="muted">Isi uang diterima untuk menghitung kembalian</span>';
+  const diff = paid - c.total;
+  if(diff === 0) return '<span><b>Uang pas</b></span><span class="kSub">Rp0</span>';
+  if(diff > 0) return `<span><b>Kembalian</b></span><span class="kSub kBig" style="color:var(--ok);">${kasirRp(diff)}</span>`;
+  return `<span><b>Kurang</b></span><span class="kSub kBig" style="color:#e07a7a;">${kasirRp(-diff)}</span>`;
 }
 function kasirBindTM(t){
   const cb = document.getElementById('kTMOn');
@@ -1245,6 +1255,10 @@ function kasirRenderBody(){
         <select id="kAdminType"><option value="rp" ${t.adminType==='rp'?'selected':''}>Rp</option><option value="pct" ${t.adminType==='pct'?'selected':''}>%</option></select>
         <span class="kSub" id="kAdminAmt">+${kasirRp(c.admin)}</span></div>
       <div class="kLine"><span><b>TOTAL</b></span><span class="kSub kBig" id="kTotal">${kasirRp(c.total)}</span></div>
+      <div class="kLine"><span>Uang diterima</span>
+        <input type="number" inputmode="numeric" min="0" id="kPaid" style="width:130px;" value="${t.paid||''}" placeholder="0">
+        <button type="button" class="small ghost" id="kPaidPas">Uang pas</button></div>
+      <div class="kLine" id="kChangeRow"></div>
     </div>
     <input type="text" id="kNote" placeholder="Catatan (nama pembeli, dll)" value="${escHtml(t.note)}" style="margin-top:10px;">
     <div class="kBtns">
@@ -1257,6 +1271,9 @@ function kasirRenderBody(){
   sel('kSales', e=>{ t.sales = e.target.value; kasirSave(); kasirRenderTabsLabelsOnly(); });
   sel('kBayar', e=>{ t.bayar = e.target.value; kasirSave(); kasirUpdateTotals(t); });
   kasirBindTM(t);
+  const chEl0 = document.getElementById('kChangeRow'); if(chEl0) chEl0.innerHTML = kasirChangeHtml(t);
+  document.getElementById('kPaid').oninput = e=>{ t.paid = Math.max(Number(e.target.value)||0, 0); kasirSave(); const r = document.getElementById('kChangeRow'); if(r) r.innerHTML = kasirChangeHtml(t); };
+  document.getElementById('kPaidPas').onclick = ()=>{ t.paid = kasirCalc(t).total; kasirSave(); document.getElementById('kPaid').value = t.paid; document.getElementById('kChangeRow').innerHTML = kasirChangeHtml(t); };
   sel('kDiscType', e=>{ t.discType = e.target.value; kasirSave(); kasirUpdateTotals(t); });
   const kd = document.getElementById('kDisc'); if(kd) kd.oninput = e=>{ t.disc = Math.max(Number(e.target.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
   document.getElementById('kAdmin').oninput = e=>{ t.admin = Math.max(Number(e.target.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
