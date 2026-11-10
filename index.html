@@ -83,6 +83,7 @@ th{color:var(--muted);font-weight:500;}
 .kLine{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .kLine input[type=number],.kLine input[type=text],.kLine select{margin-bottom:0;width:auto;}
 .kTM{margin:8px 0;padding:8px 10px;border:1px dashed var(--line,#444);border-radius:8px;font-size:13px;} .kTMHead{display:flex;gap:6px;align-items:center;} .kTMOk{color:var(--ok);margin-top:4px;} .kTMWarn{color:#e0a53a;margin-top:4px;} .kTMNote{color:var(--muted);margin-top:4px;font-size:12px;}
+.sWrap{position:relative;flex:1;min-width:0;} .sWrap input{width:100%;padding-right:34px;box-sizing:border-box;} .sWrap .sClear{display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);width:26px;height:26px;line-height:22px;padding:0;border:none;border-radius:50%;background:transparent;color:var(--muted);font-size:20px;cursor:pointer;} .sWrap .sClear:hover{color:var(--text,#fff);}
 .cpBtn{font-size:11px;padding:1px 7px;margin-left:4px;border-radius:6px;border:1px solid var(--line,#555);background:transparent;color:var(--muted);cursor:pointer;vertical-align:middle;font-weight:normal;} .cpBtn:active{opacity:.6;}
 .nOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;display:flex;align-items:center;justify-content:center;padding:12px;overflow:auto;} .nBox{max-height:100%;overflow:auto;} .nBtns{display:flex;gap:8px;justify-content:center;margin-top:10px;}
 .kLine input.kPrice{width:130px;} .kLine input.kQty{width:56px;text-align:center;} .kLine input.kSn{flex:1;min-width:120px;}
@@ -627,12 +628,19 @@ function stokHintHtml(){
       ${state.manualSupportUpdated ? ' &middot; Pendukung manual: '+state.manualSupportUpdated : ''}
       ${state.barcodeUpdated ? ' &middot; Barcode: '+state.barcodeUpdated : ''}${loadingNote}`;
 }
+// Tombol silang di kolom pencarian: tampil hanya kalau ada teks, klik = kosongkan & fokus lagi.
+function bindClear(inp, btn, onClear){
+  const sync = ()=>{ btn.style.display = inp.value ? 'block' : 'none'; };
+  inp.addEventListener('input', sync);
+  btn.onclick = ()=>{ inp.value = ''; sync(); onClear(); inp.focus(); };
+  sync();
+}
 function stokView(){
   return `<div class="card">
     <h2>Cek Harga & Stok</h2>
     <div class="hint" id="dataHint">${stokHintHtml()}</div>
     <div class="searchRow">
-      <input type="text" id="searchBox" value="${state.query.replace(/"/g,'&quot;')}" placeholder="Ketik Item No., Item Description, Barcode, atau Serial Number...">
+      <div class="sWrap"><input type="text" id="searchBox" value="${state.query.replace(/"/g,'&quot;')}" placeholder="Ketik Item No., Item Description, Barcode, atau Serial Number..."><button type="button" class="sClear" id="searchClear" aria-label="Hapus pencarian" title="Hapus pencarian">&times;</button></div>
       <button class="ghost" id="filterBtn" type="button">${filterBtnLabel()}</button>
     </div>
     <div class="fSummary" id="filterSummary" style="display:${filtersActive()?'block':'none'}">${escHtml(filterSummaryText())}</div>
@@ -805,6 +813,7 @@ function runSearchAndRenderBody(){
 function bindStok(){
   const box = document.getElementById('searchBox');
   box.oninput = ()=>{ state.query = box.value; clearTimeout(searchTimer); searchTimer = setTimeout(runSearchAndRenderBody, 200); };
+  bindClear(box, document.getElementById('searchClear'), ()=>{ state.query = ''; clearTimeout(searchTimer); runSearchAndRenderBody(); });
   const btn = document.getElementById('filterBtn');
   btn.onclick = ()=>{
     state.filterOpen = !state.filterOpen;
@@ -1157,7 +1166,7 @@ function kasirView(){
     <h2>Kasir</h2>
     <div class="hint">Catatan untuk membantu input ke komputer. <b>Tidak mengurangi stok.</b> Tersimpan di perangkat ini saja. Tambah item lewat tombol <b>+ Kasir</b> di tab Cek Stok.</div>
     <div class="tabs catRow" id="kTabs"></div>
-    <input type="text" id="kSearch" placeholder="Cari item untuk ditambahkan ke transaksi aktif..." autocomplete="off" value="${escHtml(_kQuery)}">
+    <div class="sWrap"><input type="text" id="kSearch" placeholder="Cari item untuk ditambahkan ke transaksi aktif..." autocomplete="off" value="${escHtml(_kQuery)}"><button type="button" class="sClear" id="kSearchClear" aria-label="Hapus pencarian" title="Hapus pencarian">&times;</button></div>
     <div id="kSearchRes" class="kSearchRes"></div>
     <div id="kBody"></div>
   </div>`;
@@ -1339,6 +1348,7 @@ function kasirRenderHits(){
 function bindKasir(){
   kasirRenderTabs(); kasirRenderBody(); kasirRenderHits();
   const inp = document.getElementById('kSearch');
+  bindClear(inp, document.getElementById('kSearchClear'), ()=>{ _kQuery = ''; kasirRenderHits(); });
   inp.oninput = ()=>{ _kQuery = inp.value; clearTimeout(_kTimer); _kTimer = setTimeout(kasirRenderHits, 200); };
   document.getElementById('kSearchRes').onclick = (e)=>{
     const b = e.target.closest && e.target.closest('.kHitAdd'); if(!b) return;
