@@ -978,6 +978,7 @@ function kasirLine(i){
   const gross = (Number(i.price)||0) * (Number(i.qty)||0);
   let d = Math.max(Number(i.disc)||0, 0);
   if(i.discType === 'pct') d = Math.round(gross * Math.min(d,100) / 100);
+  if(i.free) return {gross, d: gross, tm: 0, net: 0, free: true};
   const tm = Math.min(Number(i.tmAmt)||0, Math.max(gross - d, 0));
   d = Math.min(d + tm, gross);
   return {gross, d, tm, net: gross - d};
@@ -1014,6 +1015,10 @@ function kasirAddGmc(t, hp, months){
 // ---- Potongan Tebus Murah (TM) otomatis ----
 const TM_OK_BAYAR = ['Cash or Transfer','Debit'];
 const _tmInfo = {};
+function kasirIsTM(i){
+  if(/^TM\b/i.test(i.ds||'')) return true;
+  return (state.promoTM||[]).some(p=>p.items.some(s=>s.codes.some(c=>c.c===i.no)));
+}
 function kasirTMOn(){ return kasirData().tmAuto !== false; }
 function kasirApplyTM(t){
   t.items.forEach(i=>{ i.tmAmt = 0; });
@@ -1024,7 +1029,7 @@ function kasirApplyTM(t){
   if(!pk.length) return info;
   const codeSet = new Set();
   pk.forEach(p=>p.items.forEach(s=>s.codes.forEach(c=>codeSet.add(c.c))));
-  const tmItems = t.items.filter(i=>codeSet.has(i.no));
+  const tmItems = t.items.filter(i=>codeSet.has(i.no) && !i.free); // item yang ditandai GRATIS tidak ikut dipotong paket
   const hps = t.items.filter(i=>/^GAD\./.test(i.no));
   if(!tmItems.length) return info;
   if(!hps.length){ info.warns.push('Ada item promo TM, tapi belum ada HP (GAD) di keranjang: belum dipotong.'); return info; }
@@ -1151,7 +1156,7 @@ function kasirSummaryText(t){
   lines.push('Sales: '+(t.sales||'-')+' | Bayar: '+(t.bayar||'-'));
   t.items.forEach((i,n)=>{
     const l = kasirLine(i);
-    lines.push((n+1)+'. '+i.ds+' ('+i.no+')'+(kasirBarcode(i) ? ' [BC: '+kasirBarcode(i)+']' : '')+' x'+i.qty+' @'+kasirRp(i.price)+((l.d-l.tm) ? ' | nego -'+kasirRp(l.d-l.tm)+(i.discType==='pct' ? ' ('+i.disc+'%)' : '') : '')+(l.tm ? ' | potongan TM -'+kasirRp(l.tm) : '')+' = '+kasirRp(l.net)+(i.sn ? ' | SN/Ket: '+i.sn : ''));
+    lines.push((n+1)+'. '+i.ds+' ('+i.no+')'+(kasirBarcode(i) ? ' [BC: '+kasirBarcode(i)+']' : '')+' x'+i.qty+' @'+kasirRp(i.price)+(l.free ? ' | GRATIS (promo)' : '')+(!l.free && (l.d-l.tm) ? ' | nego -'+kasirRp(l.d-l.tm)+(i.discType==='pct' ? ' ('+i.disc+'%)' : '') : '')+(l.tm ? ' | potongan TM -'+kasirRp(l.tm) : '')+' = '+kasirRp(l.net)+(i.sn ? ' | SN/Ket: '+i.sn : ''));
   });
   if(c.disc > 0) lines.push('Potongan transaksi: -'+kasirRp(c.disc)+(t.discType==='pct' ? ' ('+t.disc+'%)' : ''));
   if(c.admin > 0) lines.push('Biaya admin: +'+kasirRp(c.admin)+(t.adminType==='pct' ? ' ('+t.admin+'%)' : ''));
@@ -1187,7 +1192,7 @@ function kasirUpdateTotals(t){
   const c = kasirCalc(t);
   const set = (id,v)=>{ const e = document.getElementById(id); if(e) e.textContent = v; };
   set('kSubtotal', kasirRp(c.gross)); set('kItemDisc', '-'+kasirRp(c.itemDisc)); set('kDiscAmt', '-'+kasirRp(c.disc)); set('kAdminAmt', '+'+kasirRp(c.admin)); set('kTotal', kasirRp(c.total));
-  t.items.forEach(i=>{ const l = kasirLine(i), sid = i.key.replace(/[^A-Za-z0-9]/g,'_'); set('kSub_'+sid, kasirRp(l.net)); set('kND_'+sid, (l.d-l.tm ? 'nego -'+kasirRp(l.d-l.tm) : '') + (l.tm ? ' TM -'+kasirRp(l.tm) : '')); });
+  t.items.forEach(i=>{ const l = kasirLine(i), sid = i.key.replace(/[^A-Za-z0-9]/g,'_'); set('kSub_'+sid, kasirRp(l.net)); set('kND_'+sid, l.free ? 'GRATIS' : (l.d-l.tm ? 'nego -'+kasirRp(l.d-l.tm) : '') + (l.tm ? ' TM -'+kasirRp(l.tm) : '')); });
   const chEl = document.getElementById('kChangeRow'); if(chEl) chEl.innerHTML = kasirChangeHtml(t);
   const tmEl = document.getElementById('kTM'); if(tmEl){ tmEl.innerHTML = kasirTMHtml(t); kasirBindTM(t); }
   kasirRenderTabsLabelsOnly();
@@ -1232,7 +1237,8 @@ function kasirRenderBody(){
         <span class="muted">Nego</span>
         <input type="number" inputmode="numeric" min="0" class="kItemDisc" style="width:100px;" value="${i.disc||''}" placeholder="0" title="Potongan nego untuk item ini (dari total baris)">
         <select class="kItemDiscType"><option value="rp" ${i.discType==='rp'?'selected':''}>Rp</option><option value="pct" ${i.discType==='pct'?'selected':''}>%</option></select>
-        <span class="muted" id="kND_${sid}">${(kasirLine(i).d-kasirLine(i).tm) ? 'nego -'+kasirRp(kasirLine(i).d-kasirLine(i).tm) : ''}${kasirLine(i).tm ? ' TM -'+kasirRp(kasirLine(i).tm) : ''}</span>
+        ${kasirIsTM(i) ? `<button type="button" class="small ${i.free?'':'ghost'} kFree" title="Tandai item TM ini gratis (promo HP)">${i.free ? '\u2713 GRATIS' : 'Free'}</button>` : ''}
+        <span class="muted" id="kND_${sid}">${kasirLine(i).free ? 'GRATIS (promo)' : ((kasirLine(i).d-kasirLine(i).tm) ? 'nego -'+kasirRp(kasirLine(i).d-kasirLine(i).tm) : '')+(kasirLine(i).tm ? ' TM -'+kasirRp(kasirLine(i).tm) : '')}</span>
       </div>
       ${/^GAD\./.test(i.no) ? (()=>{ const tr = gmcTier(i.base||i.price); return tr ? `<div class="kLine" style="margin-top:6px;"><span class="muted">GMart Care (tier ${tr.n}):</span><button class="small ghost kGmc" data-m="12" type="button">+ 12 bln ${kasirRp(tr.m12)}</button><button class="small ghost kGmc" data-m="24" type="button">+ 24 bln ${kasirRp(tr.m24)}</button></div>` : `<div class="muted" style="font-size:12px;margin-top:6px;">GMart Care: harga HP di luar range tabel (1jt - 50jt)</div>`; })() : ''}
       <div class="kLine kCopyRow" style="margin-top:6px;"><span class="muted">Salin</span>
@@ -1299,6 +1305,7 @@ function kasirRenderBody(){
     const idEl = row.querySelector('.kItemDisc'), idType = row.querySelector('.kItemDiscType');
     idEl.oninput = ()=>{ it.disc = Math.max(Number(idEl.value)||0, 0); kasirSave(); kasirUpdateTotals(t); };
     idType.onchange = ()=>{ it.discType = idType.value; kasirSave(); kasirUpdateTotals(t); };
+    const fb = row.querySelector('.kFree'); if(fb) fb.onclick = ()=>{ it.free = !it.free; kasirSave(); kasirRenderBody(); kasirRenderTabsLabelsOnly(); };
     row.querySelectorAll('.kCp').forEach(b=>{ b.onclick = ()=>{
       const f = b.dataset.f, l = kasirLine(it);
       if(f === 'no') kasirCopy(it.no, 'Kode');
