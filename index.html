@@ -597,7 +597,7 @@ function promotorView(){
     tableHtml = rows.length ? `
       <div class="tablewrap"><table>
         <thead><tr><th>Nama Item</th><th>Warehouse Code</th><th>Stock</th></tr></thead>
-        <tbody>${rows.map(r=>`<tr><td>${r.deskripsi}</td><td>${r.gudang}</td><td>${r.available}</td></tr>`).join('')}</tbody>
+        <tbody>${rows.map(r=>`<tr><td>${r.deskripsi} ${cpBtn(r.deskripsi,'Nama item')}</td><td>${r.gudang}</td><td>${r.available}</td></tr>`).join('')}</tbody>
       </table></div>` : '<div class="muted">Tidak ada stock ready untuk brand ini di gudang sendiri.</div>';
   }
   return `<div class="card">
@@ -608,6 +608,8 @@ function promotorView(){
   </div>`;
 }
 function bindPromotor(){
+  const tw = document.querySelector('.card .tablewrap');
+  if(tw) tw.onclick = (e)=>{ const cp = e.target.closest && e.target.closest('.cpBtn'); if(cp) kasirCopy(cp.dataset.copy, cp.dataset.label); };
   document.querySelectorAll('#brandChips .tab').forEach(chip=>{
     chip.onclick = ()=>{ state.promotorBrand = chip.dataset.brand; render(); };
   });
