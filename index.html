@@ -573,11 +573,13 @@ function ownStockRows(){
   if(out.length) return out;
   return state.items.filter(it=> it.gudang !== undefined).map(it=>({itemNo: it.itemNo, deskripsi: it.deskripsi, gudang: it.gudang, available: it.available}));
 }
+// Brand yang tidak ditampilkan di menu Stock Promotor.
+const PROMOTOR_HIDDEN_BRANDS = ['ACR','ADV','ASS','HWI','ITV','LEN','MTL','NOK','VLN'];
 function getGadBrands(){
   const set = new Set();
   ownStockRows().forEach(it=>{
     const parts = it.itemNo.split('.');
-    if(parts[0]==='GAD' && parts[1]) set.add(parts[1]);
+    if(parts[0]==='GAD' && parts[1] && !PROMOTOR_HIDDEN_BRANDS.includes(parts[1])) set.add(parts[1]);
   });
   return Array.from(set).sort();
 }
