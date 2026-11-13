@@ -595,13 +595,54 @@ function promotorRows(brand){
     }, {map:{}, list:[]}).list
     .sort((a,b)=> a.deskripsi.localeCompare(b.deskripsi));
 }
+// Samsung: 1 seri = semua warna & penyimpanan dijumlahkan. Varian koneksi (WIFI / 4G / 5G / LTE) tetap seri terpisah.
+const SAM_COLORS = new Set(['BLACK','WHITE','BLUE','GRAY','GREY','GREEN','VIOLET','NAVY','SILVER','PINK','RED','GOLD','LAVENDER','MINT','CREAM','SHADOW','ICEBLUE','YELLOW','ORANGE','PURPLE','TITANIUM','PHANTOM','BEIGE']);
+function samSeriesName(desc){
+  let d = String(desc||'').toUpperCase().replace(/\([^)]*\)/g,' ').replace(/\s+/g,' ').trim();
+  const ldu = /^LDU\b/.test(d);
+  d = d.replace(/^LDU\s+/,'').replace(/^SAMSUNG\s+/,'').replace(/^R\s+[A-Z]\d{3}\s+/,'');
+  const conn = [];
+  (d.match(/\b(WIFI|4G|5G|LTE)\b/g)||[]).forEach(c=>{ if(!conn.includes(c)) conn.push(c); });
+  const m = /\b\d+(GB)?\s*\/\s*\d+\s*(GB|TB)?\b/.exec(d);
+  let base = (m ? d.slice(0, m.index) : d).replace(/\b(WIFI|4G|5G|LTE)\b/g,' ').replace(/\s+/g,' ').trim();
+  let toks = base.split(' ');
+  while(toks.length > 1 && SAM_COLORS.has(toks[toks.length-1])) toks.pop();
+  const name = (ldu ? 'LDU ' : '') + 'SAMSUNG ' + toks.join(' ') + (conn.length ? ' ' + conn.join(' ') : '');
+  return name.replace(/\s+/g,' ').trim();
+}
+function samsungGroups(rows){
+  const map = {}, list = [];
+  rows.forEach(r=>{
+    const k = samSeriesName(r.deskripsi);
+    let g = map[k]; if(!g){ g = map[k] = {name: k, total: 0, items: []}; list.push(g); }
+    g.total += r.available; g.items.push(r);
+  });
+  list.forEach(g=>{
+    const pr = g.items.map(i=>i.harga).filter(x=>x>0);
+    g.min = pr.length ? Math.min.apply(null, pr) : 0; g.max = pr.length ? Math.max.apply(null, pr) : 0;
+    g.items.sort((a,b)=>a.deskripsi.localeCompare(b.deskripsi));
+  });
+  return list.sort((a,b)=>a.name.localeCompare(b.name));
+}
+function promoRp(n){ return n ? 'Rp'+Number(n).toLocaleString('id-ID') : '-'; }
+function samsungTableHtml(rows){
+  const groups = samsungGroups(rows);
+  const body = groups.map((g,i)=>{
+    const price = g.min && g.min !== g.max ? promoRp(g.min)+' \u2013 '+promoRp(g.max) : promoRp(g.min);
+    const head = `<tr class="grpRow" data-g="${i}" style="cursor:pointer;"><td><span class="grpArrow">\u25B8</span> <b>${g.name}</b> <span class="muted">(${g.items.length} varian)</span> ${cpBtn(g.name,'Nama seri')}</td><td><b>${g.total}</b></td><td>${price}</td></tr>`;
+    const det = g.items.map(r=>`<tr class="grpDet" data-g="${i}" style="display:none;"><td style="padding-left:24px;" class="muted">${r.deskripsi} ${cpBtn(r.deskripsi,'Nama item')}</td><td>${r.available}</td><td>${promoRp(r.harga)}</td></tr>`).join('');
+    return head + det;
+  }).join('');
+  return `<div class="hint">Samsung dihitung per seri (semua warna &amp; penyimpanan digabung). Klik baris seri untuk melihat rincian.</div>
+    <div class="tablewrap"><table><thead><tr><th>Nama Item</th><th>Stock</th><th>Harga</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
 function promotorView(){
   const brands = getGadBrands();
   const chips = brands.map(b=>`<div class="tab ${state.promotorBrand===b?'active':''}" data-brand="${b}">${gadBrandName(b)}</div>`).join('');
   let tableHtml = '';
   if(state.promotorBrand){
     const rows = promotorRows(state.promotorBrand);
-    tableHtml = rows.length ? `
+    tableHtml = (rows.length && state.promotorBrand === 'SAM') ? samsungTableHtml(rows) : rows.length ? `
       <div class="tablewrap"><table>
         <thead><tr><th>Nama Item</th><th>Stock</th><th>Harga</th></tr></thead>
         <tbody>${rows.map(r=>`<tr><td>${r.deskripsi} ${cpBtn(r.deskripsi,'Nama item')}</td><td>${r.available}</td><td>${r.harga ? 'Rp'+Number(r.harga).toLocaleString('id-ID') : '-'}</td></tr>`).join('')}</tbody>
@@ -616,7 +657,13 @@ function promotorView(){
 }
 function bindPromotor(){
   const tw = document.querySelector('.card .tablewrap');
-  if(tw) tw.onclick = (e)=>{ const cp = e.target.closest && e.target.closest('.cpBtn'); if(cp) kasirCopy(cp.dataset.copy, cp.dataset.label); };
+  if(tw) tw.onclick = (e)=>{
+    const cp = e.target.closest && e.target.closest('.cpBtn'); if(cp){ kasirCopy(cp.dataset.copy, cp.dataset.label); return; }
+    const gr = e.target.closest && e.target.closest('.grpRow'); if(!gr) return;
+    const open = gr.classList.toggle('open');
+    tw.querySelectorAll('.grpDet[data-g="'+gr.dataset.g+'"]').forEach(r=>{ r.style.display = open ? 'table-row' : 'none'; });
+    const ar = gr.querySelector('.grpArrow'); if(ar) ar.textContent = open ? '\u25BE' : '\u25B8';
+  };
   document.querySelectorAll('#brandChips .tab').forEach(chip=>{
     chip.onclick = ()=>{ state.promotorBrand = chip.dataset.brand; render(); };
   });
