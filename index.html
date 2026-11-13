@@ -587,8 +587,13 @@ function promotorRows(brand){
   const prefix = 'GAD.'+brand+'.';
   return ownStockRows()
     .filter(it=> it.itemNo.startsWith(prefix) && it.available > 0)
-    .map(it=>({ deskripsi: it.deskripsi, gudang: it.gudang, available: it.available }))
-    .sort((a,b)=> a.deskripsi.localeCompare(b.deskripsi) || a.gudang.localeCompare(b.gudang));
+    .reduce((acc,it)=>{ // satu baris per item: stok semua gudang sendiri dijumlahkan
+      const ex = acc.map[it.itemNo];
+      if(ex) ex.available += it.available;
+      else { const r = { itemNo: it.itemNo, deskripsi: it.deskripsi, available: it.available, harga: (state.priceMap && state.priceMap[it.itemNo]) || 0 }; acc.map[it.itemNo] = r; acc.list.push(r); }
+      return acc;
+    }, {map:{}, list:[]}).list
+    .sort((a,b)=> a.deskripsi.localeCompare(b.deskripsi));
 }
 function promotorView(){
   const brands = getGadBrands();
@@ -598,8 +603,8 @@ function promotorView(){
     const rows = promotorRows(state.promotorBrand);
     tableHtml = rows.length ? `
       <div class="tablewrap"><table>
-        <thead><tr><th>Nama Item</th><th>Warehouse Code</th><th>Stock</th></tr></thead>
-        <tbody>${rows.map(r=>`<tr><td>${r.deskripsi} ${cpBtn(r.deskripsi,'Nama item')}</td><td>${r.gudang}</td><td>${r.available}</td></tr>`).join('')}</tbody>
+        <thead><tr><th>Nama Item</th><th>Stock</th><th>Harga</th></tr></thead>
+        <tbody>${rows.map(r=>`<tr><td>${r.deskripsi} ${cpBtn(r.deskripsi,'Nama item')}</td><td>${r.available}</td><td>${r.harga ? 'Rp'+Number(r.harga).toLocaleString('id-ID') : '-'}</td></tr>`).join('')}</tbody>
       </table></div>` : '<div class="muted">Tidak ada stock ready untuk brand ini di gudang sendiri.</div>';
   }
   return `<div class="card">
